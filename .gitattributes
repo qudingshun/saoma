@@ -1,4 +1,7 @@
-* text=auto
+# 统一策略：文本文件入库/检出都用 LF + UTF-8（不带 BOM）。
+# 任何机器 clone / pull 下来的文件字节与本地一致，中文不乱码。
+# 例外：Windows 批处理必须 CRLF；二进制文件不转换。
+* text=auto eol=lf
 gradlew text eol=lf
 *.sh text eol=lf
 *.bat text eol=crlf
