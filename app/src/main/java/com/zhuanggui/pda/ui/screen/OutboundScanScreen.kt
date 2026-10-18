@@ -44,8 +44,8 @@ import com.zhuanggui.pda.ui.OutboundScanState
  * 出库扫码界面（竖屏）：
  *  - 顶部：返回设置（可追加规则）/ 触发扫描
  *  - 撤回/前进：本柜当前会话的记录操作可回退、重做（撤销扫码 / 恢复删除）
- *  - 报警弹窗（重复/串号/超量）：点确认停止震动；重复/串号还可一步删除该记录
- *  - 记录明细：重复/串号点按一步确认删除；正常记录点按需三步确认；删除均为软删除（可在
+ *  - 报警弹窗（重复/串号/超量）：点确认停止震动；重复/串号/超量还可一步删除该记录
+ *  - 记录明细：重复/串号/辅助码/超量点按一步确认删除；正常记录点按需三步确认；删除均为软删除（可在
  *    回收站或「撤回」恢复）
  *  - 任意触屏操作立即停止振动
  */
@@ -95,10 +95,11 @@ fun OutboundScanScreen(
                     buildString {
                         append(state.lastMessage)
                         if (state.lastResult == ScanResult.DUPLICATE ||
-                            state.lastResult == ScanResult.SERIAL_MISMATCH
+                            state.lastResult == ScanResult.SERIAL_MISMATCH ||
+                            state.lastResult == ScanResult.OVER_LIMIT
                         ) {
                             append("\n\n可点「删除这条记录」移除刚扫的这条（进回收站）；")
-                            append("也可点按下方记录列表中的重复/串号行删除。")
+                            append("也可点按下方记录列表中的重复/串号/超量行删除。")
                         }
                     },
                     fontSize = 13.sp
@@ -111,7 +112,8 @@ fun OutboundScanScreen(
                 }) { Text("知道了（停止震动）") }
             },
             dismissButton = if (state.lastResult == ScanResult.DUPLICATE ||
-                state.lastResult == ScanResult.SERIAL_MISMATCH
+                state.lastResult == ScanResult.SERIAL_MISMATCH ||
+                state.lastResult == ScanResult.OVER_LIMIT
             ) {
                 {
                     TextButton(onClick = {
@@ -120,8 +122,11 @@ fun OutboundScanScreen(
                         onDeleteRecord(state.lastRecordId)
                     }) {
                         Text(
-                            if (state.lastResult == ScanResult.DUPLICATE) "删除这条重复记录"
-                            else "删除这条串号记录"
+                            when (state.lastResult) {
+                                ScanResult.DUPLICATE -> "删除这条重复记录"
+                                ScanResult.OVER_LIMIT -> "删除这条超量记录"
+                                else -> "删除这条串号记录"
+                            }
                         )
                     }
                 }
@@ -155,11 +160,12 @@ fun OutboundScanScreen(
         )
     }
 
-    // 重复/串号/辅助码：一步确认删除
+    // 重复/串号/辅助码/超量：一步确认删除
     deleteTarget?.let { target ->
         val kind = when (target.result) {
             ScanResult.DUPLICATE -> "重复"
             ScanResult.AUX -> "辅助码"
+            ScanResult.OVER_LIMIT -> "超量"
             else -> "串号"
         }
         val effect = if (target.result == ScanResult.AUX) "本柜计数不受影响（辅助码不计入统计）"
@@ -340,7 +346,8 @@ fun OutboundScanScreen(
                         deletable = r.result == ScanResult.OK ||
                             r.result == ScanResult.DUPLICATE ||
                             r.result == ScanResult.SERIAL_MISMATCH ||
-                            r.result == ScanResult.AUX,
+                            r.result == ScanResult.AUX ||
+                            r.result == ScanResult.OVER_LIMIT,
                         onDeleteClick = {
                             if (r.result == ScanResult.OK) tripleTarget = r
                             else deleteTarget = r

@@ -435,8 +435,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 删除一条记录（扫码页）：正常/重复/串号/辅助码均可删。
-     *  - 正常记录由界面走「三步确认」后调用；重复/串号/辅助码一步确认（报警弹窗或点按行）
+     * 删除一条记录（扫码页）：正常/重复/串号/辅助码/超量均可删。
+     *  - 正常记录由界面走「三步确认」后调用；重复/串号/辅助码/超量一步确认（报警弹窗或点按行）
      *  - 一律软删除进回收站（可撤回）；本柜计数实时重算；落盘文件同步进文件回收站
      */
     fun deleteRecord(recordId: Long) {
@@ -446,7 +446,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val deletable = rec.result == ScanResult.OK ||
                     rec.result == ScanResult.DUPLICATE ||
                     rec.result == ScanResult.SERIAL_MISMATCH ||
-                    rec.result == ScanResult.AUX
+                    rec.result == ScanResult.AUX ||
+                    rec.result == ScanResult.OVER_LIMIT
                 if (!deletable) return@withLock
                 val container = _outbound.value.activeContainer ?: return@withLock
                 if (rec.containerId != container.id) return@withLock
