@@ -303,7 +303,7 @@ private fun resultBreakdown(g: ScanRecordGroup): String {
     return if (parts.isEmpty()) "—" else parts.joinToString(" · ")
 }
 
-// ==================== 二级：某柜全部条码 ====================
+// ==================== 二级：某柜某日条码 ====================
 
 @Composable
 private fun GroupDetailPage(
@@ -331,7 +331,7 @@ private fun GroupDetailPage(
                 }
             }
             Text(
-                "${group.dayLabel} · 共 ${group.cnt} 条 · 全部条码（新 → 旧）",
+                "${group.dayLabel} · 共 ${group.cnt} 条 · 当日条码（新 → 旧）",
                 fontSize = 12.sp, color = Color.Gray
             )
             HorizontalDivider(Modifier.padding(top = 4.dp))

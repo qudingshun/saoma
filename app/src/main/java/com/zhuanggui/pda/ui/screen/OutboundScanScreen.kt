@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,8 +67,8 @@ fun OutboundScanScreen(
     BackHandler { onBackToSetup() }
 
     // 报警弹窗：按 scanSeq 去重（同一枪只弹一次；确认/触屏后不再弹）
-    var ackedSeq by remember { mutableStateOf(-1L) }
-    var ackedCompleted by remember { mutableStateOf(0L) }                // 装柜完成弹窗：同一事件只弹一次
+    var ackedSeq by rememberSaveable { mutableStateOf(-1L) }
+    var ackedCompleted by rememberSaveable { mutableStateOf(0L) }        // 装柜完成弹窗：同一事件只弹一次（重建后仍防重复弹）
     var deleteTarget by remember { mutableStateOf<ScanRecord?>(null) }   // 重复/串号：一步确认
     var tripleTarget by remember { mutableStateOf<ScanRecord?>(null) }   // 正常记录：三步确认
 

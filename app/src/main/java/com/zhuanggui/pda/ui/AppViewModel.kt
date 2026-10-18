@@ -3,6 +3,7 @@ package com.zhuanggui.pda.ui
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -154,10 +155,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedGroup = MutableStateFlow<ScanRecordGroup?>(null)
     val selectedGroup: StateFlow<ScanRecordGroup?> = _selectedGroup.asStateFlow()
 
-    /** 二级：选中柜号的全部记录 */
+    /** 二级：选中组（柜号 + 日期）当天的记录（与一级分组口径一致） */
     val selectedGroupRecords: StateFlow<List<ScanRecord>> = _selectedGroup
         .filterNotNull()
-        .flatMapLatest { recordDao.observeByContainerAll(it.containerId) }
+        .flatMapLatest { recordDao.observeByContainerOnDay(it.containerId, it.dayLabel) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** 回收站：已删除（软删）的记录，可逐条撤回或全部撤回 */
@@ -182,14 +183,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         scanner.register()
         viewModelScope.launch {
             scanner.scans.collect { barcode ->
-                when {
-                    // 装柜进行中 → 正常校验
-                    _outboundStage.value == OutboundStage.SCANNING &&
-                        _outbound.value.activeContainer != null -> handleOutboundScan(barcode)
-                    // 设置页 → 扫码填入规则栏（完整码，人工删减成前缀）
-                    _outboundStage.value == OutboundStage.SETUP ->
-                        _setup.update { it.copy(ruleInput = barcode.trim()) }
-                    // 其余场景忽略（老的 Excel 工单流程已下架，见 archive/）
+                // 兜底：单次扫码事件处理异常绝不终止采集流（否则之后所有扫码都会静默失效）
+                try {
+                    when {
+                        // 装柜进行中 → 正常校验
+                        _outboundStage.value == OutboundStage.SCANNING &&
+                            _outbound.value.activeContainer != null -> handleOutboundScan(barcode)
+                        // 设置页 → 扫码填入规则栏（完整码，人工删减成前缀）
+                        _outboundStage.value == OutboundStage.SETUP ->
+                            _setup.update { it.copy(ruleInput = barcode.trim()) }
+                        // 其余场景忽略（老的 Excel 工单流程已下架，见 archive/）
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "扫码事件处理失败", t)
                 }
             }
         }
@@ -331,76 +337,82 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun startOutboundScan(): Boolean {
         val s = _setup.value
         if (s.containerNo.isBlank() || s.rules.isEmpty()) return false
-        outboundMutex.withLock {
-            // 防双击：已在装柜中且柜号未变 → 幂等跳过（不重复初始化）
-            val already = _outboundStage.value == OutboundStage.SCANNING &&
-                _outbound.value.activeContainer?.containerNo == s.containerNo
-            if (!already) {
-                val total = s.totalQuantity.toIntOrNull() ?: 0
-                // 容器 + 规则快照同步在同一事务，避免中途失败留下半套规则
-                val container = app.database.withTransaction {
-                    val existing = containerDao.findByNo(s.containerNo)
-                    val c: LoadContainer = if (existing == null) {
-                        // 新柜号 → 建装柜会话（柜号唯一约束：同号柜只能复用一个会话行）
-                        val id = containerDao.insert(
-                            LoadContainer(containerNo = s.containerNo, totalQuantity = total)
-                        )
-                        LoadContainer(id = id, containerNo = s.containerNo, totalQuantity = total)
-                    } else if (existing.totalQuantity != total) {
-                        // 已有柜号 → 复用会话行，不新建；本柜数量以本次填写为准
-                        val updated = existing.copy(totalQuantity = total)
-                        containerDao.update(updated)
-                        updated
-                    } else {
-                        existing
-                    }
-                    ruleDao.getByContainer(c.id).forEach { ruleDao.delete(it.id) }
-                    s.rules.forEach {
-                        ruleDao.insert(
-                            LoadRule(
-                                containerId = c.id,
-                                prefix = it.prefix,
-                                allowDuplicate = it.allowDuplicate,
-                                countEnabled = it.countEnabled,
-                                checkHistory = it.checkHistory
+        // 兜底：落库 / 恢复计数异常时记日志并留在设置页，不崩溃
+        try {
+            outboundMutex.withLock {
+                // 防双击：已在装柜中且柜号未变 → 幂等跳过（不重复初始化）
+                val already = _outboundStage.value == OutboundStage.SCANNING &&
+                    _outbound.value.activeContainer?.containerNo == s.containerNo
+                if (!already) {
+                    val total = s.totalQuantity.toIntOrNull() ?: 0
+                    // 容器 + 规则快照同步在同一事务，避免中途失败留下半套规则
+                    val container = app.database.withTransaction {
+                        val existing = containerDao.findByNo(s.containerNo)
+                        val c: LoadContainer = if (existing == null) {
+                            // 新柜号 → 建装柜会话（柜号唯一约束：同号柜只能复用一个会话行）
+                            val id = containerDao.insert(
+                                LoadContainer(containerNo = s.containerNo, totalQuantity = total)
                             )
-                        )
+                            LoadContainer(id = id, containerNo = s.containerNo, totalQuantity = total)
+                        } else if (existing.totalQuantity != total) {
+                            // 已有柜号 → 复用会话行，不新建；本柜数量以本次填写为准
+                            val updated = existing.copy(totalQuantity = total)
+                            containerDao.update(updated)
+                            updated
+                        } else {
+                            existing
+                        }
+                        ruleDao.getByContainer(c.id).forEach { ruleDao.delete(it.id) }
+                        s.rules.forEach {
+                            ruleDao.insert(
+                                LoadRule(
+                                    containerId = c.id,
+                                    prefix = it.prefix,
+                                    allowDuplicate = it.allowDuplicate,
+                                    countEnabled = it.countEnabled,
+                                    checkHistory = it.checkHistory
+                                )
+                            )
+                        }
+                        c
                     }
-                    c
-                }
 
-                // 换柜 = 新会话：清空撤回/前进栈（同柜继续装柜则保留）
-                if (_outbound.value.activeContainer?.id != container.id) {
-                    undoStack.clear()
-                    redoStack.clear()
-                    syncUndoState()
-                }
-
-                // 恢复本柜历史计数（同柜号回来继续装柜，计数不丢）
-                val counts = countResults(container.id)
-
-                _outbound.value = OutboundScanState(
-                    activeContainer = container,
-                    rules = s.rules,
-                    total = total,
-                    okCount = counts.ok, mismatchCount = counts.mm,
-                    duplicateCount = counts.dup, overCount = counts.over,
-                    totalRecords = counts.total,
-                    lastMessage = when {
-                        total > 0 && counts.ok >= total ->
-                            "该柜已装齐（${counts.ok}/$total）：再扫码将提示超量"
-                        counts.total > 0 -> "继续装柜：已扫 ${counts.total} 条"
-                        else -> "开始装柜：扫一个码自动保存一条"
+                    // 换柜 = 新会话：清空撤回/前进栈（同柜继续装柜则保留）
+                    if (_outbound.value.activeContainer?.id != container.id) {
+                        undoStack.clear()
+                        redoStack.clear()
+                        syncUndoState()
                     }
-                )
-                _outboundStage.value = OutboundStage.SCANNING
-                recordsJob?.cancel()
-                recordsJob = viewModelScope.launch {
-                    recordDao.observeByContainer(container.id, 100).collect {
-                        _outboundRecords.value = it
+
+                    // 恢复本柜历史计数（同柜号回来继续装柜，计数不丢）
+                    val counts = countResults(container.id)
+
+                    _outbound.value = OutboundScanState(
+                        activeContainer = container,
+                        rules = s.rules,
+                        total = total,
+                        okCount = counts.ok, mismatchCount = counts.mm,
+                        duplicateCount = counts.dup, overCount = counts.over,
+                        totalRecords = counts.total,
+                        lastMessage = when {
+                            total > 0 && counts.ok >= total ->
+                                "该柜已装齐（${counts.ok}/$total）：再扫码将提示超量"
+                            counts.total > 0 -> "继续装柜：已扫 ${counts.total} 条"
+                            else -> "开始装柜：扫一个码自动保存一条"
+                        }
+                    )
+                    _outboundStage.value = OutboundStage.SCANNING
+                    recordsJob?.cancel()
+                    recordsJob = viewModelScope.launch {
+                        recordDao.observeByContainer(container.id, 100).collect {
+                            _outboundRecords.value = it
+                        }
                     }
                 }
             }
+        } catch (t: Throwable) {
+            Log.e(TAG, "装柜初始化失败（留在设置页可重试）", t)
+            return false
         }
         return true
     }
@@ -476,34 +488,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 回收站：逐条撤回（计数与落盘文件一并恢复） */
+    /** 回收站：逐条撤回（计数与落盘文件一并恢复；与扫码共用互斥锁，避免并发窗口） */
     fun restoreTrashRecord(recordId: Long) {
         viewModelScope.launch {
-            val rec = recordDao.getById(recordId) ?: return@launch
-            recordDao.restoreIds(listOf(recordId))
-            refreshActiveCounts()
-            syncRecordFiles(listOf(pairOf(rec)))
+            outboundMutex.withLock {
+                val rec = recordDao.getById(recordId) ?: return@withLock
+                recordDao.restoreIds(listOf(recordId))
+                refreshActiveCounts()
+                syncRecordFiles(listOf(pairOf(rec)))
+            }
         }
     }
 
-    /** 回收站：全部撤回（计数与落盘文件一并恢复） */
+    /** 回收站：全部撤回（计数与落盘文件一并恢复；与扫码共用互斥锁） */
     fun restoreAllTrash() {
         viewModelScope.launch {
-            val recs = recordDao.getTrash()
-            if (recs.isEmpty()) return@launch
-            recordDao.restoreAll()
-            refreshActiveCounts()
-            syncRecordFiles(recs.map { pairOf(it) })
+            outboundMutex.withLock {
+                val recs = recordDao.getTrash()
+                if (recs.isEmpty()) return@withLock
+                recordDao.restoreAll()
+                refreshActiveCounts()
+                syncRecordFiles(recs.map { pairOf(it) })
+            }
         }
     }
 
-    /** 回收站：清空（永久删除；界面三步确认后调用；落盘文件一并清理） */
+    /** 回收站：清空（永久删除；界面三步确认后调用；落盘文件一并清理；与扫码共用互斥锁） */
     fun emptyTrash() {
         viewModelScope.launch {
-            val recs = recordDao.getTrash()
-            if (recs.isEmpty()) return@launch
-            recordDao.emptyTrash()
-            syncRecordFiles(recs.map { pairOf(it) })
+            outboundMutex.withLock {
+                val recs = recordDao.getTrash()
+                if (recs.isEmpty()) return@withLock
+                recordDao.emptyTrash()
+                syncRecordFiles(recs.map { pairOf(it) })
+            }
         }
     }
 
@@ -516,105 +534,106 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (barcode.isEmpty()) return
 
         viewModelScope.launch {
-            outboundMutex.withLock {
-                val st = _outbound.value
-                val container = st.activeContainer ?: return@withLock
+            // 兜底：单枪处理任何异常都只提示、不崩溃，扫码链路保持可用
+            try {
+                outboundMutex.withLock {
+                    val st = _outbound.value
+                    val container = st.activeContainer ?: return@withLock
 
-                val result: ScanResult
-                val message: String
+                    val matchedSpecs = st.rules.filter { barcode.startsWith(it.prefix) }
+                    val matched = st.rules.isEmpty() || matchedSpecs.isNotEmpty()
+                    val allowDup = matchedSpecs.any { it.allowDuplicate }
+                    val countEnabled = matchedSpecs.isEmpty() || matchedSpecs.any { it.countEnabled }
+                    val dupCount = if (allowDup) 0 else recordDao.countBarcode(container.id, barcode)
+                    // 查历史串号（勾选了该选项的规则）：条码在其他柜出现过 → 报警，防旧箱混入
+                    val historyHit = if (matchedSpecs.any { it.checkHistory })
+                        recordDao.findOtherContainerHistory(barcode, container.id) else null
 
-                val matchedSpecs = st.rules.filter { barcode.startsWith(it.prefix) }
-                val matched = st.rules.isEmpty() || matchedSpecs.isNotEmpty()
-                val allowDup = matchedSpecs.any { it.allowDuplicate }
-                val countEnabled = matchedSpecs.isEmpty() || matchedSpecs.any { it.countEnabled }
-                val dupCount = if (allowDup) 0 else recordDao.countBarcode(container.id, barcode)
-                // 查历史串号（勾选了该选项的规则）：条码在其他柜出现过 → 报警，防旧箱混入
-                val historyHit = if (matchedSpecs.any { it.checkHistory })
-                    recordDao.findOtherContainerHistory(barcode, container.id) else null
-
-                when {
-                    !matched -> {
-                        result = ScanResult.SERIAL_MISMATCH
-                        message = "串号报警！条码不符合本柜规则：$barcode"
-                    }
-                    dupCount > 0 -> {
-                        result = ScanResult.DUPLICATE
-                        message = "重复扫码！该条码已录入过：$barcode"
-                    }
-                    historyHit != null -> {
-                        result = ScanResult.SERIAL_MISMATCH
-                        message = "串号报警！该条码已于 " +
-                            SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(historyHit.scannedAt) +
-                            " 在柜 ${historyHit.containerNo} 录入过，请核实是否混入本柜"
-                    }
-                    !countEnabled -> {
-                        result = ScanResult.AUX
-                        message = "辅助码（不计入本柜统计）：$barcode"
-                    }
-                    st.total in 1..st.okCount -> {
-                        result = ScanResult.OVER_LIMIT
-                        message = "超出本柜数量（${st.total}）！条码：$barcode"
-                    }
-                    else -> {
-                        result = ScanResult.OK
-                        message = "装柜成功"
-                    }
-                }
-
-                val fullCode = "${container.containerNo}，$barcode"
-                val record = ScanRecord(
-                    containerId = container.id,
-                    containerNo = container.containerNo,
-                    barcode = barcode,
-                    fullCode = fullCode,
-                    result = result,
-                    scannedAt = Date()
-                )
-                val recordId = recordDao.insert(record)
-
-                // 本枪进「撤回」栈（撤回可撤销本次扫描）
-                pushOp(RecordOp(RecordOp.Kind.INSERT, listOf(recordId)))
-
-                // 每扫一码自动落盘（增量追加一行）
-                val saved = withContext(Dispatchers.IO) { FileExporter.append(record) }
-
-                // 报警反馈（重复/串号/超量 = 循环振动，直到被确认/触屏/下一枪/删除）
-                when (result) {
-                    ScanResult.OK, ScanResult.AUX -> alarm.success()
-                    ScanResult.OVER_LIMIT -> alarm.overLimit()
-                    else -> alarm.error()
-                }
-
-                _outbound.update { cur ->
-                    // 已切换柜号（期间返回设置页重新装柜）→ 丢弃过期更新
-                    if (cur.activeContainer?.id != container.id) cur
-                    else cur.copy(
-                        okCount = if (result == ScanResult.OK) cur.okCount + 1 else cur.okCount,
-                        // 本枪刚好装齐（正常数首次达到本柜数量）→ 置完成事件，界面弹一次「装柜完成」
-                        completedEvent = if (result == ScanResult.OK && cur.total > 0 &&
-                            cur.okCount < cur.total && cur.okCount + 1 >= cur.total
-                        ) cur.scanSeq + 1 else cur.completedEvent,
-                        mismatchCount = if (result == ScanResult.SERIAL_MISMATCH)
-                            cur.mismatchCount + 1 else cur.mismatchCount,
-                        duplicateCount = if (result == ScanResult.DUPLICATE)
-                            cur.duplicateCount + 1 else cur.duplicateCount,
-                        overCount = if (result == ScanResult.OVER_LIMIT)
-                            cur.overCount + 1 else cur.overCount,
-                        totalRecords = cur.totalRecords + 1,
-                        lastFullCode = fullCode,
-                        lastBarcode = barcode,
-                        lastMessage = message,
-                        lastResult = result,
-                        lastRecordId = recordId,
-                        scanSeq = cur.scanSeq + 1,
-                        screenColor = when (result) {
-                            ScanResult.OK -> Color(0xFFE8F5E9)
-                            ScanResult.AUX -> Color(0xFFE3F2FD)
-                            ScanResult.OVER_LIMIT -> Color(0xFFFFF9C4)
-                            else -> Color(0xFFFFCDD2)
-                        },
-                        fileSaved = saved
+                    // 判定顺序（业务契约，见 decideScanResult 注释）：串号→重复→历史串号→辅助→超量→正常
+                    val result = decideScanResult(
+                        matched = matched,
+                        dupCount = dupCount,
+                        historyHit = historyHit != null,
+                        countEnabled = countEnabled,
+                        total = st.total,
+                        okCount = st.okCount
                     )
+                    val message = when (result) {
+                        ScanResult.SERIAL_MISMATCH ->
+                            if (historyHit != null) {
+                                "串号报警！该条码已于 " +
+                                    SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(historyHit.scannedAt) +
+                                    " 在柜 ${historyHit.containerNo} 录入过，请核实是否混入本柜"
+                            } else {
+                                "串号报警！条码不符合本柜规则：$barcode"
+                            }
+                        ScanResult.DUPLICATE -> "重复扫码！该条码已录入过：$barcode"
+                        ScanResult.AUX -> "辅助码（不计入本柜统计）：$barcode"
+                        ScanResult.OVER_LIMIT -> "超出本柜数量（${st.total}）！条码：$barcode"
+                        else -> "装柜成功"
+                    }
+
+                    val fullCode = "${container.containerNo}，$barcode"
+                    val record = ScanRecord(
+                        containerId = container.id,
+                        containerNo = container.containerNo,
+                        barcode = barcode,
+                        fullCode = fullCode,
+                        result = result,
+                        scannedAt = Date()
+                    )
+                    val recordId = recordDao.insert(record)
+
+                    // 本枪进「撤回」栈（撤回可撤销本次扫描）
+                    pushOp(RecordOp(RecordOp.Kind.INSERT, listOf(recordId)))
+
+                    // 每扫一码自动落盘（增量追加一行）
+                    val saved = withContext(Dispatchers.IO) { FileExporter.append(record) }
+
+                    // 报警反馈（重复/串号/超量 = 循环振动，直到被确认/触屏/下一枪/删除）
+                    when (result) {
+                        ScanResult.OK, ScanResult.AUX -> alarm.success()
+                        ScanResult.OVER_LIMIT -> alarm.overLimit()
+                        else -> alarm.error()
+                    }
+
+                    _outbound.update { cur ->
+                        // 已切换柜号（期间返回设置页重新装柜）→ 丢弃过期更新
+                        if (cur.activeContainer?.id != container.id) cur
+                        else cur.copy(
+                            okCount = if (result == ScanResult.OK) cur.okCount + 1 else cur.okCount,
+                            // 本枪刚好装齐（正常数首次达到本柜数量）→ 置完成事件，界面弹一次「装柜完成」
+                            completedEvent = if (result == ScanResult.OK && cur.total > 0 &&
+                                cur.okCount < cur.total && cur.okCount + 1 >= cur.total
+                            ) cur.scanSeq + 1 else cur.completedEvent,
+                            mismatchCount = if (result == ScanResult.SERIAL_MISMATCH)
+                                cur.mismatchCount + 1 else cur.mismatchCount,
+                            duplicateCount = if (result == ScanResult.DUPLICATE)
+                                cur.duplicateCount + 1 else cur.duplicateCount,
+                            overCount = if (result == ScanResult.OVER_LIMIT)
+                                cur.overCount + 1 else cur.overCount,
+                            totalRecords = cur.totalRecords + 1,
+                            lastFullCode = fullCode,
+                            lastBarcode = barcode,
+                            lastMessage = message,
+                            lastResult = result,
+                            lastRecordId = recordId,
+                            scanSeq = cur.scanSeq + 1,
+                            screenColor = when (result) {
+                                ScanResult.OK -> Color(0xFFE8F5E9)
+                                ScanResult.AUX -> Color(0xFFE3F2FD)
+                                ScanResult.OVER_LIMIT -> Color(0xFFFFF9C4)
+                                else -> Color(0xFFFFCDD2)
+                            },
+                            fileSaved = saved
+                        )
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "本条扫码处理失败：$barcode", t)
+                _outbound.update { cur ->
+                    if (cur.activeContainer == null) cur
+                    else cur.copy(lastMessage = "本条处理失败（${t.message ?: "未知错误"}），请重扫")
                 }
             }
         }
@@ -631,17 +650,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteRecordGroups(groups: List<ScanRecordGroup>) {
         if (groups.isEmpty()) return
         viewModelScope.launch {
-            val now = Date()
-            app.database.withTransaction {
-                groups.forEach { recordDao.softDeleteGroup(it.containerId, it.dayLabel, now) }
-            }
-            alarm.stop()
-            refreshActiveCounts()
-            syncRecordFiles(groups.map { Triple(it.containerId, it.containerNo, it.dayLabel) })
-            // 若正停留在被删除的二级页 → 回到一级
-            val sel = _selectedGroup.value
-            if (sel != null && groups.any { it.containerId == sel.containerId && it.dayLabel == sel.dayLabel }) {
-                _selectedGroup.value = null
+            outboundMutex.withLock {
+                val now = Date()
+                app.database.withTransaction {
+                    groups.forEach { recordDao.softDeleteGroup(it.containerId, it.dayLabel, now) }
+                }
+                alarm.stop()
+                refreshActiveCounts()
+                syncRecordFiles(groups.map { Triple(it.containerId, it.containerNo, it.dayLabel) })
+                // 若正停留在被删除的二级页 → 回到一级
+                val sel = _selectedGroup.value
+                if (sel != null && groups.any { it.containerId == sel.containerId && it.dayLabel == sel.dayLabel }) {
+                    _selectedGroup.value = null
+                }
             }
         }
     }
@@ -786,5 +807,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         scanner.unregister()
         alarm.release()
         super.onCleared()
+    }
+
+    private companion object {
+        const val TAG = "AppViewModel"
     }
 }

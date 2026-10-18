@@ -12,7 +12,9 @@ import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
 import java.io.File
 import java.io.FileOutputStream
-import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
@@ -34,8 +36,13 @@ object FileExporter {
 
     private const val ROOT_DIR = "ZhuangGui/装柜记录"
     private const val TRASH_DIR = "ZhuangGui/回收站"
-    private val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-    private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    /** 时间格式化：java.time（SimpleDateFormat 非线程安全，v1.5.1 起替换） */
+    private val dayFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US)
+    private val timeFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US)
+    private val zone: ZoneId = ZoneId.systemDefault()
+
+    private fun fmtDate(d: Date): String = dayFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
+    private fun fmtTime(d: Date): String = timeFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
 
     private const val HEADER = "时间\t柜号\t条码\t完整码\t结果\n"
 
@@ -75,7 +82,7 @@ object FileExporter {
 
     /** 一行记录（TSV：制表符分隔） */
     private fun lineOf(record: ScanRecord): String = buildString {
-        append(timeFormat.format(record.scannedAt))
+        append(fmtTime(record.scannedAt))
         append('\t'); append(record.containerNo)
         append('\t'); append(record.barcode)
         append('\t'); append(record.fullCode)
@@ -96,7 +103,7 @@ object FileExporter {
      * 失败不抛异常（无权限/存储故障时由调用方提示）。
      */
     fun append(record: ScanRecord): Boolean = runCatching {
-        val day = dayFormat.format(record.scannedAt)
+        val day = fmtDate(record.scannedAt)
         val dir = File(rootDir(), day)
         if (!dir.exists() && !dir.mkdirs()) return false
         val file = File(dir, "${safeName(record.containerNo)}.tsv")

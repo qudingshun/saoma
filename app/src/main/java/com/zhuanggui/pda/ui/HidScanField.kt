@@ -26,19 +26,19 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 /**
- * HID 扫码枪录入框（与 CRUISE2 真机实测配置同步，2026-10-18 adb 读取）：
+ * HID 扫码枪录入框（兜底通道）。
  *
- * 真机当前配置：
- *  - 输出方式 = 输入法(HID)模式，默认输入法 com.dwime.lds_for_seuic/.XFMIme
- *  - config_enable_scanner_auto_commit = 0 → 扫描后【不自动回车】，无任何后缀
- *  - 无广播输出（系统里没有任何扫码广播发出）
+ * 设备端「扫描配置」当前为【广播】输出（主通道 = ScannerManager，见 readme）；
+ * 本输入框用于：把扫描配置改回「输入法(HID)模式」（默认输入法
+ * com.dwime.lds_for_seuic/.XFMIme，且不自动回车）时的键盘模拟录入。
  *
- * 因此提交策略：
- *  1. 回车（ImeAction.Done）→ 提交（兼容以后在扫描设置里开了自动回车的机器）
+ * 提交策略：
+ *  1. 回车（ImeAction.Done）→ 提交（兼容在扫描设置里开了自动回车的机器）
  *  2. 没有回车时按“击键速度”判定：整串字符平均间隔 <60ms 且 ≥4 字符 = 扫码枪输入，
  *     停止输入 150ms 后自动提交；人工打字平均 >80ms/字符，不会误触发
  *  3. 过滤 \r \n \t（部分机型配置了回车后缀，字符会被打进文本而不是触发回车）
  *  4. 进页面自动聚焦；每次提交后清空并重新聚焦 —— 连续扫码全程不用碰屏幕
+ *  5. v1.5.1 起：只有“追加字符”才计击键，删除/替换会重置判定（杜绝退格连删被误判成扫码）
  */
 @Composable
 fun HidScanField(
@@ -59,6 +59,7 @@ fun HidScanField(
     fun submit() {
         val v = code.trim()
         code = ""
+        detector.reset()
         if (v.isNotEmpty()) onSubmit(v)
         // 保持聚焦（点了别处也能扫下一枪），收起软键盘腾出屏幕
         runCatching { focusRequester.requestFocus() }
@@ -82,8 +83,15 @@ fun HidScanField(
         OutlinedTextField(
             value = code,
             onValueChange = { v ->
-                detector.onKey()
-                code = v.filter { it != '\r' && it != '\n' && it != '\t' }
+                val filtered = v.filter { it != '\r' && it != '\n' && it != '\t' }
+                when {
+                    // 仅“追加字符”算扫码枪击键（真机 HID 输入实际只走这条路径）
+                    filtered.length > code.length && filtered.startsWith(code) -> detector.onKey()
+                    // 退格 / 删除（长度变短）→ 程序化修改，重置判定，防止连续删除被误判为扫码
+                    filtered.length < code.length -> detector.reset()
+                    // 等长（替换）→ 中性，不影响当前判定
+                }
+                code = filtered
             },
             label = { Text(label) },
             singleLine = true,
@@ -121,5 +129,13 @@ private class BurstDetector {
         }
         lastTs = now
         isScannerBurst = count >= 4 && (now - burstStart) / count < 60
+    }
+
+    /** 复位（删除字符 / 提交完成 / 输入被程序化修改时调用） */
+    fun reset() {
+        lastTs = 0L
+        burstStart = 0L
+        count = 0
+        isScannerBurst = false
     }
 }

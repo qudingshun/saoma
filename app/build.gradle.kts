@@ -13,8 +13,8 @@ android {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.5.0"
+        versionCode = 8
+        versionName = "1.5.1"
     }
 
     buildTypes {
@@ -41,6 +41,11 @@ android {
     }
 }
 
+// Room schema 导出（数据库结构快照入库，便于后续迁移核对）
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
@@ -52,9 +57,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.3")
 
     implementation("androidx.room:room-runtime:2.6.1")
@@ -66,7 +69,8 @@ dependencies {
     implementation("org.apache.poi:poi:5.2.5")
     implementation("org.apache.poi:poi-ooxml:5.2.5")
     implementation("org.apache.commons:commons-compress:1.26.2")
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
 }

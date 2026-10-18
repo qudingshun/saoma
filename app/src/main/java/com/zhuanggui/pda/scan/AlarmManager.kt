@@ -21,7 +21,10 @@ import android.util.Log
  */
 class AlarmManager(private val context: Context) {
 
-    private val toneGenerator: ToneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+    // 蜂鸣器初始化兜底：个别机型/极端场景可能失败 → 失败则只保留振动反馈，绝不崩溃
+    private val toneGenerator: ToneGenerator? = runCatching {
+        ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+    }.getOrNull()
     private val handler = Handler(Looper.getMainLooper())
     private val autoStop = Runnable { stop() }
 
@@ -37,16 +40,16 @@ class AlarmManager(private val context: Context) {
 
     fun success() {
         stop() // 正常扫：顺手停掉上一枪可能未停的报警振动
-        toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
+        toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
     }
 
     fun error() {
-        toneGenerator.startTone(ToneGenerator.TONE_SUP_ERROR, 500)
+        toneGenerator?.startTone(ToneGenerator.TONE_SUP_ERROR, 500)
         vibrateLoop(longArrayOf(0, 400, 250))
     }
 
     fun overLimit() {
-        toneGenerator.startTone(ToneGenerator.TONE_DTMF_9, 300)
+        toneGenerator?.startTone(ToneGenerator.TONE_DTMF_9, 300)
         vibrateLoop(longArrayOf(0, 200, 150))
     }
 
@@ -72,7 +75,7 @@ class AlarmManager(private val context: Context) {
 
     fun release() {
         stop()
-        toneGenerator.release()
+        toneGenerator?.release()
     }
 
     companion object {

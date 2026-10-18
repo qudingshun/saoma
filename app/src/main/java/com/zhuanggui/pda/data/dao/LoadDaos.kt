@@ -33,12 +33,9 @@ interface LoadContainerDao {
     @Update
     suspend fun update(container: LoadContainer)
 
-    /** 按柜号取最新一条（柜号可能重复：同号已装完的柜会新建记录，最新批次 id 最大） */
+    /** 按柜号取会话行（柜号唯一，v1.5.0 起同号柜复用同一行；ORDER BY id DESC 仅为防御历史脏数据） */
     @Query("SELECT * FROM load_containers WHERE containerNo = :no ORDER BY id DESC LIMIT 1")
     suspend fun findByNo(no: String): LoadContainer?
-
-    @Query("SELECT * FROM load_containers ORDER BY createdAt DESC")
-    fun observeAll(): Flow<List<LoadContainer>>
 }
 
 @Dao
@@ -128,9 +125,13 @@ interface ScanRecordDao {
     )
     fun observeDayGroups(): Flow<List<ScanRecordGroup>>
 
-    /** 某柜全部记录（记录页二级：选择柜号后展示全部条码） */
-    @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC")
-    fun observeByContainerAll(containerId: Long): Flow<List<ScanRecord>>
+    /** 某柜某日记录（记录页二级：与一级分组口径一致，只展示当天条码） */
+    @Query(
+        "SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL " +
+            "AND strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') = :dayLabel " +
+            "ORDER BY scannedAt DESC, id DESC"
+    )
+    fun observeByContainerOnDay(containerId: Long, dayLabel: String): Flow<List<ScanRecord>>
 
     /** 当前柜最近 N 条（扫码页滚动显示） */
     @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT :limit")
@@ -145,9 +146,6 @@ interface ScanRecordDao {
             "AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT 1"
     )
     suspend fun findOtherContainerHistory(barcode: String, excludeContainerId: Long): ScanRecord?
-
-    @Query("SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND result = :result AND deletedAt IS NULL")
-    suspend fun countByResult(containerId: Long, result: String): Int
 
     /** 某柜某天某结果的记录数（不含回收站；用于「今天已装数」与按天统计） */
     @Query(

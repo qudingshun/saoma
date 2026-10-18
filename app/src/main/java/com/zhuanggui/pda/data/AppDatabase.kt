@@ -22,7 +22,7 @@ import com.zhuanggui.pda.data.entity.ScanRecord
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class
     ],
     version = 8,
-    exportSchema = false
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {

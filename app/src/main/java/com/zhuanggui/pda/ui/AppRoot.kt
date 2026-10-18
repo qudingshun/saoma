@@ -1,6 +1,7 @@
 package com.zhuanggui.pda.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
@@ -115,6 +116,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 扫码记录（两级聚合 + 删除） ----------
         composable(Routes.RECORDS) {
+            // 每次进入记录页都从一级（分组列表）开始，不残留上次的分组详情
+            LaunchedEffect(Unit) { vm.openRecordGroup(null) }
             RecordsScreen(
                 groups = recordGroups,
                 selected = selectedGroup,
