@@ -45,11 +45,14 @@ data class LoadContainer(
 data class LoadRule(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val containerId: Long,
-    val prefix: String                        // 流水号以外的固定部分（字母+数字）
+    val prefix: String,                       // 流水号以外的固定部分（字母+数字）
+    val allowDuplicate: Boolean = false,      // 允许重复扫（双码机固定码：同码反复扫不报“重复”）
+    val countEnabled: Boolean = true,         // 是否计入本柜统计（不勾选 = 辅助码，只留痕不计数）
+    val checkHistory: Boolean = false         // 查历史串号：条码若在其他柜记录里出现过 → 报串号（防混柜）
 )
 
 /**
- * 扫码记录：每扫一码写一条（含串号/重复/超量，完整留痕），同时自动落盘 CSV。
+ * 扫码记录：每扫一码写一条（含串号/重复/超量/辅助码，完整留痕），同时自动落盘 TSV 文件。
  * fullCode = 柜号 + "，" + 条码（逗号拼接，按需求约定）。
  */
 @Entity(
@@ -71,5 +74,24 @@ data class ScanRecord(
     val barcode: String,
     val fullCode: String,                     // 柜号，条码
     val result: ScanResult,
-    val scannedAt: Date = Date()
+    val scannedAt: Date = Date(),
+    val deletedAt: Date? = null               // 软删除时间（进回收站）；null = 有效记录
+)
+
+/**
+ * 规则库（规则源）：全局共享的条码前缀库。
+ *  - 规则源导入：从 .xlsx/.xls/.csv/.txt 导入（第一列=前缀，第二列可选=名称）
+ *  - 规则选择：装柜设置页「从规则库选择」批量加入本柜
+ *  - 规则编辑：新增 / 修改 / 删除
+ * 前缀唯一；柜子的规则仍以快照形式存在 [LoadRule]（装柜时从库复制，之后改动库不回溯）。
+ */
+@Entity(
+    tableName = "rule_library",
+    indices = [Index(value = ["prefix"], unique = true)]
+)
+data class RuleLibEntry(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val prefix: String,                       // 条码前缀（字母+数字）
+    val name: String = "",                    // 名称/型号（可选）
+    val updatedAt: Date = Date()
 )

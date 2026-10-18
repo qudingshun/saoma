@@ -13,8 +13,8 @@ android {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 7
+        versionName = "1.5.0"
     }
 
     buildTypes {
@@ -61,10 +61,12 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
+    // 规则库「规则源导入」：解析 .xlsx/.xls（POI）。
+    // 注：工单 Excel 导入功能仍保持下架，仅规则库使用 POI。
     implementation("org.apache.poi:poi:5.2.5")
     implementation("org.apache.poi:poi-ooxml:5.2.5")
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("org.apache.commons:commons-compress:1.26.2")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

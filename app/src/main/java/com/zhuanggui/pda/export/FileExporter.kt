@@ -17,12 +17,14 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 装柜记录自动落盘：
+ * 装柜记录自动落盘（TSV，制表符分隔）：
  *
- *   /sdcard/ZhuangGui/装柜记录/yyyy-MM-dd/柜号.csv
+ *   /sdcard/ZhuangGui/装柜记录/yyyy-MM-dd/柜号.tsv   —— 未删除（活动）记录
+ *   /sdcard/ZhuangGui/回收站/yyyy-MM-dd/柜号.tsv     —— 已删除（软删除）记录
  *
  * - 每扫一码调用 append() 增量写一行（不重写全文件）
- * - 文件不存在时先写表头
+ * - 删除 / 撤回 / 恢复后调用 syncDay() 按数据库重写当天两侧文件，保持与 APP 动作一致：
+ *   整组删空 = 文件从「装柜记录」移动到「回收站」目录；撤回 = 移回；部分删除 = 两侧各留一份
  * - 编码 UTF-8 带 BOM（Excel 打开中文不乱码）
  *
  * 权限：Android 11+ 需要“所有文件访问”（PDA 离线自用应用常规做法），
@@ -31,13 +33,17 @@ import java.util.Locale
 object FileExporter {
 
     private const val ROOT_DIR = "ZhuangGui/装柜记录"
+    private const val TRASH_DIR = "ZhuangGui/回收站"
     private val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-    private const val HEADER = "时间,柜号,条码,完整码,结果\n"
+    private const val HEADER = "时间\t柜号\t条码\t完整码\t结果\n"
 
     /** 根目录（PDA 文件管理器里直接可找） */
     fun rootDir(): File = File(Environment.getExternalStorageDirectory(), ROOT_DIR)
+
+    /** 文件回收站目录（与 APP 删除动作一致：删掉的记录文件挪到这里） */
+    fun trashRootDir(): File = File(Environment.getExternalStorageDirectory(), TRASH_DIR)
 
     /** 当前是否有写入权限 */
     fun hasPermission(context: Context): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -63,6 +69,28 @@ object FileExporter {
         }
     }
 
+    /** 柜号 → 安全文件名（去掉文件系统非法字符） */
+    private fun safeName(containerNo: String): String =
+        containerNo.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+
+    /** 一行记录（TSV：制表符分隔） */
+    private fun lineOf(record: ScanRecord): String = buildString {
+        append(timeFormat.format(record.scannedAt))
+        append('\t'); append(record.containerNo)
+        append('\t'); append(record.barcode)
+        append('\t'); append(record.fullCode)
+        append('\t'); append(resultText(record.result))
+        append('\n')
+    }
+
+    /** 重写整个文件：BOM + 表头 + 按扫描时间排序的记录 */
+    private fun writeAll(file: File, records: List<ScanRecord>) {
+        file.parentFile?.mkdirs()
+        val sb = StringBuilder("\uFEFF$HEADER")
+        records.sortedWith(compareBy({ it.scannedAt.time }, { it.id })).forEach { sb.append(lineOf(it)) }
+        file.outputStream().use { it.write(sb.toString().toByteArray(Charsets.UTF_8)) }
+    }
+
     /**
      * 增量追加一条记录。返回 true=写入成功。
      * 失败不抛异常（无权限/存储故障时由调用方提示）。
@@ -71,22 +99,55 @@ object FileExporter {
         val day = dayFormat.format(record.scannedAt)
         val dir = File(rootDir(), day)
         if (!dir.exists() && !dir.mkdirs()) return false
-        val safeName = record.containerNo.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val file = File(dir, "$safeName.csv")
+        val file = File(dir, "${safeName(record.containerNo)}.tsv")
         if (!file.exists()) {
             file.outputStream().use { it.write("\uFEFF$HEADER".toByteArray(Charsets.UTF_8)) }
         }
-        val line = buildString {
-            append(timeFormat.format(record.scannedAt))
-            append(','); append(record.containerNo)
-            append(','); append(record.barcode)
-            append(','); append(record.fullCode)
-            append(','); append(resultText(record.result))
-            append('\n')
-        }
-        FileOutputStream(file, true).use { it.write(line.toByteArray(Charsets.UTF_8)) }
+        FileOutputStream(file, true).use { it.write(lineOf(record).toByteArray(Charsets.UTF_8)) }
         true
     }.getOrDefault(false)
+
+    /**
+     * 删除 / 撤回 / 恢复后：按数据库现状重写「某柜某日」两侧文件。
+     *  - 装柜记录文件 = [active]（空则删除文件 → 等价于整组移出）
+     *  - 回收站文件   = [deleted]（空则删除文件 → 等价于整组移回）
+     *  - 两侧都空（清空回收站）= 永久删除，旧 CSV 也一并清理
+     *  - v1.5.0 之前的旧 .csv 文件：同步时挪进回收站目录（不再留在装柜记录里造成不一致）
+     */
+    fun syncDay(dayLabel: String, containerNo: String, active: List<ScanRecord>, deleted: List<ScanRecord>) {
+        runCatching {
+            val name = safeName(containerNo)
+            val activeDir = File(rootDir(), dayLabel)
+            val trashDir = File(trashRootDir(), dayLabel)
+            val activeFile = File(activeDir, "$name.tsv")
+            val trashFile = File(trashDir, "$name.tsv")
+            val legacyActive = File(activeDir, "$name.csv")   // v1.5.0 之前的旧 CSV 落盘
+            val legacyTrash = File(trashDir, "$name.csv")
+
+            // 旧 .csv 不再参与新逻辑：先挪去回收站目录归档（目标已存在则保留原位，不删数据）
+            if (legacyActive.exists() && !legacyTrash.exists()) {
+                trashDir.mkdirs()
+                legacyActive.renameTo(legacyTrash)
+            }
+
+            if (active.isNotEmpty()) {
+                writeAll(activeFile, active)
+            } else {
+                activeFile.delete()
+            }
+
+            if (deleted.isNotEmpty()) {
+                writeAll(trashFile, deleted)
+            } else {
+                trashFile.delete()
+                // 两侧都空 = 清空回收站（永久删除）→ 旧文件一并清理
+                if (active.isEmpty()) {
+                    legacyTrash.delete()
+                    legacyActive.delete()
+                }
+            }
+        }
+    }
 
     private fun resultText(r: ScanResult): String = when (r) {
         ScanResult.OK -> "正常"
@@ -94,5 +155,6 @@ object FileExporter {
         ScanResult.OVER_LIMIT -> "超量"
         ScanResult.SERIAL_MISMATCH -> "串号"
         ScanResult.DUPLICATE -> "重复"
+        ScanResult.AUX -> "辅助"
     }
 }

@@ -1,6 +1,9 @@
 package com.zhuanggui.pda.ui.screen
 
 import android.app.Activity
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -8,8 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -17,22 +20,26 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.BuildConfig
+import com.zhuanggui.pda.R
 import com.zhuanggui.pda.export.FileExporter
 
 /**
- * 首页：两个入口
+ * 首页：顶部品牌 LOGO + 两个入口
  *  1. 出库扫码（主流程：柜号/数量/条码规则 → 装柜扫码 → 自动落盘）
- *  2. Excel 导入工单（老功能：清单校验防错流程）
+ *  2. 扫码记录查看
+ *
+ * 注：老的「Excel 导入工单（防错校验）」已下架，源码存档见 archive/excel-workorder-v1.2.0/
  */
 @Composable
 fun HomeScreen(
     onOutbound: () -> Unit,
-    onLegacy: () -> Unit,
     onRecords: () -> Unit
 ) {
     Scaffold { pad ->
@@ -45,13 +52,24 @@ fun HomeScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("装柜防错", fontSize = 40.sp, fontWeight = FontWeight.Bold)
+            // logo 为透明底黑字图：套白色圆角底卡，深色模式下也清晰
+            Image(
+                painter = painterResource(R.drawable.logo),
+                contentDescription = "惠而浦 Whirlpool",
+                modifier = Modifier
+                    .width(270.dp)
+                    .background(Color.White, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                contentScale = ContentScale.Fit
+            )
+            Spacer(Modifier.height(18.dp))
+            Text("成品出库", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Text(
                 "v${BuildConfig.VERSION_NAME}",
                 fontSize = 16.sp,
                 color = Color.Gray
             )
-            Spacer(Modifier.height(48.dp))
+            Spacer(Modifier.height(44.dp))
 
             Button(
                 onClick = {
@@ -67,15 +85,6 @@ fun HomeScreen(
             }
 
             Spacer(Modifier.height(20.dp))
-
-            OutlinedButton(
-                onClick = onLegacy,
-                modifier = Modifier.fillMaxWidth().height(72.dp)
-            ) {
-                Text("Excel导入工单（防错校验）", fontSize = 20.sp)
-            }
-
-            Spacer(Modifier.height(16.dp))
 
             OutlinedButton(
                 onClick = onRecords,

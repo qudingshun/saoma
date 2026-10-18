@@ -7,8 +7,23 @@ import androidx.room.Query
 import androidx.room.Update
 import com.zhuanggui.pda.data.entity.LoadContainer
 import com.zhuanggui.pda.data.entity.LoadRule
+import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.ScanRecord
 import kotlinx.coroutines.flow.Flow
+import java.util.Date
+
+/** 记录页一级聚合行：按「日期 + 柜号」分组的统计 */
+data class ScanRecordGroup(
+    val dayLabel: String,   // yyyy-MM-dd（设备本地时区）
+    val containerId: Long,
+    val containerNo: String,
+    val cnt: Int,           // 该组记录总数
+    val okCnt: Int,         // 正常
+    val mmCnt: Int,         // 串号
+    val dupCnt: Int,        // 重复
+    val overCnt: Int,       // 超量
+    val lastAt: Long        // 组内最新一条时间（排序用）
+)
 
 @Dao
 interface LoadContainerDao {
@@ -18,7 +33,8 @@ interface LoadContainerDao {
     @Update
     suspend fun update(container: LoadContainer)
 
-    @Query("SELECT * FROM load_containers WHERE containerNo = :no LIMIT 1")
+    /** 按柜号取最新一条（柜号可能重复：同号已装完的柜会新建记录，最新批次 id 最大） */
+    @Query("SELECT * FROM load_containers WHERE containerNo = :no ORDER BY id DESC LIMIT 1")
     suspend fun findByNo(no: String): LoadContainer?
 
     @Query("SELECT * FROM load_containers ORDER BY createdAt DESC")
@@ -42,17 +58,122 @@ interface ScanRecordDao {
     @Insert
     suspend fun insert(record: ScanRecord): Long
 
-    /** 全部记录，新的在前（扫码记录页） */
-    @Query("SELECT * FROM scan_records ORDER BY scannedAt DESC")
-    fun observeAll(): Flow<List<ScanRecord>>
+    @Query("SELECT * FROM scan_records WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): ScanRecord?
+
+    /** 按 id 批量取（含已删除；撤回/前进后同步落盘文件用） */
+    @Query("SELECT * FROM scan_records WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<ScanRecord>
+
+    // -------- 软删除（回收站）：删除 = 打标记，可在回收站撤回 --------
+
+    /** 软删除单条（扫码页） */
+    @Query("UPDATE scan_records SET deletedAt = :at WHERE id = :id AND deletedAt IS NULL")
+    suspend fun softDeleteById(id: Long, at: Date)
+
+    /** 软删除多条（撤回栈批量用） */
+    @Query("UPDATE scan_records SET deletedAt = :at WHERE id IN (:ids) AND deletedAt IS NULL")
+    suspend fun softDeleteIds(ids: List<Long>, at: Date)
+
+    /**
+     * 软删除整组记录（记录页：某柜某日期的全部记录）。
+     * 日期表达式与 [observeDayGroups] 的分组表达式一致（本地时区）。
+     */
+    @Query(
+        "UPDATE scan_records SET deletedAt = :at WHERE containerId = :containerId " +
+            "AND strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') = :dayLabel " +
+            "AND deletedAt IS NULL"
+    )
+    suspend fun softDeleteGroup(containerId: Long, dayLabel: String, at: Date)
+
+    /** 某柜某日全部记录（含已删除；删除/撤回后同步装柜记录文件与文件回收站用） */
+    @Query(
+        "SELECT * FROM scan_records WHERE containerId = :containerId " +
+            "AND strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') = :dayLabel " +
+            "ORDER BY scannedAt, id"
+    )
+    suspend fun getAllGroup(containerId: Long, dayLabel: String): List<ScanRecord>
+
+    /** 撤回：恢复指定记录（deletedAt 置空） */
+    @Query("UPDATE scan_records SET deletedAt = NULL WHERE id IN (:ids)")
+    suspend fun restoreIds(ids: List<Long>)
+
+    /** 回收站：全部撤回 */
+    @Query("UPDATE scan_records SET deletedAt = NULL WHERE deletedAt IS NOT NULL")
+    suspend fun restoreAll()
+
+    /** 回收站列表（新删的在前） */
+    @Query("SELECT * FROM scan_records WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC, id DESC")
+    fun observeTrash(): Flow<List<ScanRecord>>
+
+    /** 回收站快照（清空/全部撤回前先取，用于同步落盘文件） */
+    @Query("SELECT * FROM scan_records WHERE deletedAt IS NOT NULL")
+    suspend fun getTrash(): List<ScanRecord>
+
+    /** 回收站：清空（永久删除，UI 三次确认） */
+    @Query("DELETE FROM scan_records WHERE deletedAt IS NOT NULL")
+    suspend fun emptyTrash()
+
+    /** 记录页一级聚合：按「日期 + 柜号」分组统计（最新日期在前；不含回收站） */
+    @Query(
+        "SELECT strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') AS dayLabel, " +
+            "containerId, containerNo, " +
+            "COUNT(*) AS cnt, " +
+            "SUM(CASE WHEN result = 'OK' THEN 1 ELSE 0 END) AS okCnt, " +
+            "SUM(CASE WHEN result = 'SERIAL_MISMATCH' THEN 1 ELSE 0 END) AS mmCnt, " +
+            "SUM(CASE WHEN result = 'DUPLICATE' THEN 1 ELSE 0 END) AS dupCnt, " +
+            "SUM(CASE WHEN result = 'OVER_LIMIT' THEN 1 ELSE 0 END) AS overCnt, " +
+            "MAX(scannedAt) AS lastAt " +
+            "FROM scan_records WHERE deletedAt IS NULL GROUP BY dayLabel, containerId ORDER BY lastAt DESC"
+    )
+    fun observeDayGroups(): Flow<List<ScanRecordGroup>>
+
+    /** 某柜全部记录（记录页二级：选择柜号后展示全部条码） */
+    @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC")
+    fun observeByContainerAll(containerId: Long): Flow<List<ScanRecord>>
 
     /** 当前柜最近 N 条（扫码页滚动显示） */
-    @Query("SELECT * FROM scan_records WHERE containerId = :containerId ORDER BY scannedAt DESC, id DESC LIMIT :limit")
+    @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT :limit")
     fun observeByContainer(containerId: Long, limit: Int): Flow<List<ScanRecord>>
 
-    @Query("SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND barcode = :barcode")
+    @Query("SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND barcode = :barcode AND deletedAt IS NULL")
     suspend fun countBarcode(containerId: Long, barcode: String): Int
 
-    @Query("SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND result = :result")
+    /** 查历史串号：该条码是否已在「其他柜」的有效记录中扫过（取最新一条，用于报警提示） */
+    @Query(
+        "SELECT * FROM scan_records WHERE barcode = :barcode AND containerId != :excludeContainerId " +
+            "AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT 1"
+    )
+    suspend fun findOtherContainerHistory(barcode: String, excludeContainerId: Long): ScanRecord?
+
+    @Query("SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND result = :result AND deletedAt IS NULL")
     suspend fun countByResult(containerId: Long, result: String): Int
+
+    /** 某柜某天某结果的记录数（不含回收站；用于「今天已装数」与按天统计） */
+    @Query(
+        "SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND result = :result " +
+            "AND deletedAt IS NULL " +
+            "AND strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') = :dayLabel"
+    )
+    suspend fun countByResultOnDay(containerId: Long, result: String, dayLabel: String): Int
+}
+
+@Dao
+interface RuleLibDao {
+    /** 新增或覆盖（prefix 唯一，冲突则替换：导入用） */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entry: RuleLibEntry): Long
+
+    /** 修改（规则编辑） */
+    @Query("UPDATE rule_library SET prefix = :prefix, name = :name, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun update(id: Long, prefix: String, name: String, updatedAt: Date)
+
+    @Query("SELECT * FROM rule_library ORDER BY prefix")
+    fun observeAll(): Flow<List<RuleLibEntry>>
+
+    @Query("SELECT * FROM rule_library ORDER BY prefix")
+    suspend fun getAll(): List<RuleLibEntry>
+
+    @Query("DELETE FROM rule_library WHERE id = :id")
+    suspend fun delete(id: Long)
 }
