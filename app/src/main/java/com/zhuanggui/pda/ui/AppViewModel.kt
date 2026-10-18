@@ -680,6 +680,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val cleanName = name.trim()
         viewModelScope.launch {
             if (id == null) {
+                // 新增同样查重（与编辑一致）：避免 upsert 的 REPLACE 静默覆盖库中同名前缀
+                if (ruleLibDao.getAll().any { it.prefix == prefix }) {
+                    _ruleLibMessage.value = "前缀已存在：$prefix（未新增；可在列表中点该行「编辑」改名称）"
+                    return@launch
+                }
                 ruleLibDao.upsert(RuleLibEntry(prefix = prefix, name = cleanName))
             } else {
                 val conflict = ruleLibDao.getAll().any { it.prefix == prefix && it.id != id }

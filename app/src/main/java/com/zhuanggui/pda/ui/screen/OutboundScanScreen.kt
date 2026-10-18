@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
+import com.zhuanggui.pda.export.FileExporter
 import com.zhuanggui.pda.ui.OutboundScanState
 
 /**
@@ -210,8 +211,8 @@ fun OutboundScanScreen(
     Scaffold { pad ->
         Column(
             Modifier
-                .padding(pad)
                 .fillMaxSize()
+                // 报警底色放在 padding(pad) 之前：edge-to-edge 下也铺满状态栏区域
                 .background(state.screenColor)
                 // 任意触屏操作立即停止报警振动（不消费事件，不影响按钮/输入框）
                 .pointerInput(Unit) {
@@ -220,6 +221,7 @@ fun OutboundScanScreen(
                         onStopAlarm()
                     }
                 }
+                .padding(pad)
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
             // ---------- 顶部工具条 ----------
@@ -283,7 +285,7 @@ fun OutboundScanScreen(
                     )
                     Text(
                         if (state.lastFullCode.isBlank()) "每扫一码自动保存到 TSV 文件"
-                        else if (state.fileSaved) "✓ 已自动保存（/sdcard/ZhuangGui/装柜记录/）"
+                        else if (state.fileSaved) "✓ 已自动保存（${FileExporter.displayPath()}/）"
                         else "⚠ 最近一条未写入文件，请检查存储权限",
                         fontSize = 11.sp,
                         color = if (state.lastFullCode.isNotBlank() && !state.fileSaved)
@@ -330,7 +332,7 @@ fun OutboundScanScreen(
             ) {
                 Text("本柜记录", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "${records.size} 条 · 点按删除（正常记录需三次确认）",
+                    "共 ${state.totalRecords} 条 · 最近 ${records.size} 条可点按删除（正常记录需三次确认）",
                     fontSize = 11.sp, color = Color.Gray
                 )
             }

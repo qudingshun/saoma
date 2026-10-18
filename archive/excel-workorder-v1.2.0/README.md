@@ -80,6 +80,6 @@ app/src/main/java/com/zhuanggui/pda/
 
 ## 备注
 
-- 同名 zip 打包：`archive/excel-workorder-v1.2.0.zip`（本文件夹的压缩版，便于整体备份）
+- 注：原同名 zip 压缩包已删除（与文件夹重复；如需找回，git 历史中可查）
 - 扫码广播对接（v1.2.0 已完成，见主 README「扫码对接」章节）**不受本次下架影响**
 - 设备端"应用扫描配置"按包名生效（com.zhuanggui.pda），重装/升级不丢失

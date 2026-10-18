@@ -17,6 +17,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,6 +30,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.zhuanggui.pda.BuildConfig
 import com.zhuanggui.pda.R
 import com.zhuanggui.pda.export.FileExporter
@@ -44,6 +49,12 @@ fun HomeScreen(
 ) {
     Scaffold { pad ->
         val context = LocalContext.current
+        // 存储授权状态：进入/回到首页时复检（去系统设置授权完返回 → 提示自动消失）
+        var hasStorage by remember { mutableStateOf(FileExporter.hasPermission(context)) }
+        LifecycleResumeEffect(Unit) {
+            hasStorage = FileExporter.hasPermission(context)
+            onPauseOrDispose { }
+        }
         Column(
             Modifier
                 .padding(pad)
@@ -83,6 +94,13 @@ fun HomeScreen(
             ) {
                 Text("出库扫码", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             }
+            if (!hasStorage) {
+                Text(
+                    "⚠ 未授权「所有文件访问」：记录不会自动落盘；点上方按钮按提示授权后返回本页即消失",
+                    fontSize = 12.sp, color = Color(0xFFD32F2F),
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
 
             Spacer(Modifier.height(20.dp))
 
@@ -95,7 +113,7 @@ fun HomeScreen(
 
             Spacer(Modifier.height(40.dp))
             Text(
-                "记录自动保存：/sdcard/ZhuangGui/装柜记录/",
+                "记录自动保存：${FileExporter.displayPath()}/",
                 fontSize = 13.sp,
                 color = Color.Gray
             )

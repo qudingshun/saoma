@@ -29,8 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
-import java.text.SimpleDateFormat
-import java.util.Locale
+import com.zhuanggui.pda.ui.formatUiMinute
 
 /**
  * 回收站（隐藏入口：扫码记录页「长按标题」进入）：
@@ -161,7 +160,5 @@ private fun TrashRow(r: ScanRecord, onRestore: () -> Unit) {
     HorizontalDivider(thickness = 0.5.dp)
 }
 
-private val trashFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-
 private fun deletedText(r: ScanRecord): String =
-    r.deletedAt?.let { runCatching { trashFmt.format(it) }.getOrDefault("") }.orEmpty()
+    r.deletedAt?.let { runCatching { formatUiMinute(it) }.getOrDefault("") }.orEmpty()

@@ -49,6 +49,9 @@ object FileExporter {
     /** 根目录（PDA 文件管理器里直接可找） */
     fun rootDir(): File = File(Environment.getExternalStorageDirectory(), ROOT_DIR)
 
+    /** 界面展示用路径（/sdcard 与真实路径 /storage/emulated/0 等价，文件管理器里可见；界面文案统一从这里取） */
+    fun displayPath(): String = "/sdcard/$ROOT_DIR"
+
     /** 文件回收站目录（与 APP 删除动作一致：删掉的记录文件挪到这里） */
     fun trashRootDir(): File = File(Environment.getExternalStorageDirectory(), TRASH_DIR)
 

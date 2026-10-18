@@ -40,8 +40,7 @@ import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.data.dao.ScanRecordGroup
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
-import java.text.SimpleDateFormat
-import java.util.Locale
+import com.zhuanggui.pda.ui.formatUiDateTime
 
 /**
  * 扫码记录查看页（两级聚合）：
@@ -388,6 +387,5 @@ private fun RecordItem(r: ScanRecord) {
     }
 }
 
-private val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-
-private fun timeText(r: ScanRecord): String = runCatching { timeFmt.format(r.scannedAt) }.getOrDefault("")
+private fun timeText(r: ScanRecord): String =
+    runCatching { formatUiDateTime(r.scannedAt) }.getOrDefault("")

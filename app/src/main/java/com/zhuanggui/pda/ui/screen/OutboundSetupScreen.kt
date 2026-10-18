@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -191,22 +190,19 @@ fun OutboundSetupScreen(
             ) {
                 Checkbox(
                     checked = state.ruleAllowDup,
-                    onCheckedChange = onRuleAllowDup,
-                    modifier = Modifier.size(36.dp)
+                    onCheckedChange = onRuleAllowDup
                 )
                 Text("可重复扫", fontSize = 13.sp)
                 Spacer(Modifier.width(6.dp))
                 Checkbox(
                     checked = state.ruleCount,
-                    onCheckedChange = onRuleCount,
-                    modifier = Modifier.size(36.dp)
+                    onCheckedChange = onRuleCount
                 )
                 Text("计入统计", fontSize = 13.sp)
                 Spacer(Modifier.width(6.dp))
                 Checkbox(
                     checked = state.ruleCheckHistory,
-                    onCheckedChange = onRuleCheckHistory,
-                    modifier = Modifier.size(36.dp)
+                    onCheckedChange = onRuleCheckHistory
                 )
                 Text("查历史串号", fontSize = 13.sp)
             }
@@ -279,8 +275,7 @@ fun OutboundSetupScreen(
                                         checked = rule.allowDuplicate,
                                         onCheckedChange = {
                                             onRuleFlags(rule.prefix, it, rule.countEnabled, rule.checkHistory)
-                                        },
-                                        modifier = Modifier.size(36.dp)
+                                        }
                                     )
                                     Text("可重复扫", fontSize = 12.sp)
                                     Spacer(Modifier.width(4.dp))
@@ -288,8 +283,7 @@ fun OutboundSetupScreen(
                                         checked = rule.countEnabled,
                                         onCheckedChange = {
                                             onRuleFlags(rule.prefix, rule.allowDuplicate, it, rule.checkHistory)
-                                        },
-                                        modifier = Modifier.size(36.dp)
+                                        }
                                     )
                                     Text("计入统计", fontSize = 12.sp)
                                     Spacer(Modifier.width(4.dp))
@@ -297,8 +291,7 @@ fun OutboundSetupScreen(
                                         checked = rule.checkHistory,
                                         onCheckedChange = {
                                             onRuleFlags(rule.prefix, rule.allowDuplicate, rule.countEnabled, it)
-                                        },
-                                        modifier = Modifier.size(36.dp)
+                                        }
                                     )
                                     Text("查历史串号", fontSize = 12.sp)
                                 }
