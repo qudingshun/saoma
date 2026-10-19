@@ -43,7 +43,7 @@ enum class OutboundStage { SETUP, SCANNING }
 
 /** 本柜条码规则（双码机选项）：
  *  - [allowDuplicate] 允许重复扫：同码可反复扫不报“重复”（双码机的固定码）
- *  - [countEnabled] 计入统计：不勾选 = 辅助码（AUX），只留痕不计数、不占本柜数量
+ *  - [countEnabled] 计入统计：不勾选 = 辅助码（AUX），只留痕不计数、不占计划装柜数量
  *  - [checkHistory] 查历史串号：条码若在其他柜的记录里出现过 → 报串号（防止混入其他柜的旧箱）
  */
 data class RuleSpec(
@@ -53,23 +53,23 @@ data class RuleSpec(
     val checkHistory: Boolean = false
 )
 
-/** 出库扫码：设置阶段状态 */
+/** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」） */
 data class OutboundSetupState(
     val containerNo: String = "",
-    val totalQuantity: String = "",            // 本柜数量（留空/0 = 不限）
+    val totalQuantity: String = "",            // 计划装柜数量（留空/0 = 不限）
     val rules: List<RuleSpec> = emptyList(),   // 条码规则（前缀），拼装柜可多条
     val ruleInput: String = "",
     val ruleAllowDup: Boolean = false,         // 新增规则时勾选：可重复扫
     val ruleCount: Boolean = true,             // 新增规则时勾选：计入统计
     val ruleCheckHistory: Boolean = false,     // 新增规则时勾选：查历史串号
-    val resumed: Boolean = false               // 命中已有柜号（未装完）= 继续装柜
+    val scannedQuantity: Int = 0               // 今天已扫码数量（命中今天已有记录的柜号时自动带出，只读展示）
 )
 
 /** 出库扫码：扫码阶段状态 */
 data class OutboundScanState(
     val activeContainer: LoadContainer? = null,
     val rules: List<RuleSpec> = emptyList(),
-    val total: Int = 0,                        // 本柜数量（0 = 不限）
+    val total: Int = 0,                        // 计划装柜数量（0 = 不限）
     val okCount: Int = 0,                      // 正常件数
     val mismatchCount: Int = 0,                // 串号
     val duplicateCount: Int = 0,               // 重复
@@ -211,15 +211,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun onContainerNoChange(v: String) {
         // 柜号只允许字母+数字
         val clean = v.filter { it.isLetterOrDigit() }.uppercase()
-        _setup.update { it.copy(containerNo = clean) }
+        _setup.update {
+            it.copy(containerNo = clean, scannedQuantity = if (clean.isBlank()) 0 else it.scannedQuantity)
+        }
         scheduleContainerLookup(clean)
     }
 
     /**
      * 柜号输入后（防抖 150ms）查询已有柜号：
-     *  - 柜号「今天」已有装柜记录（已删除的不参与统计）→ 自动载入原规则；本柜数量自动填入今天已装数量
-     *    → 进入扫码页后新扫会提示超量（闭环防重复装柜；如需补装手动改大本柜数量）
-     *  - 其余情况 → 取消「已有装柜记录」提示（保持手填数量与已有规则）
+     *  - 柜号「今天」已有装柜记录（已删除的不参与统计）→ 自动载入原规则 + 已存计划装柜数量，
+     *    并带出「已扫码数量」（今天已装正常数，只读展示）→ 继续扫码从已扫数接着计数，
+     *    扫满计划数量时提示装柜完成；已装齐再扫则提示超量（如需补装改大计划装柜数量）
+     *  - 其余情况 → 清空「已扫码数量」展示（保持手填计划与已有规则）
      * 输入已变化时丢弃过期查询结果。
      */
     private fun scheduleContainerLookup(clean: String) {
@@ -230,7 +233,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val existing = containerDao.findByNo(clean)
             if (_setup.value.containerNo != clean) return@launch // 期间输入已变化，丢弃过期查询
             if (existing == null) {
-                _setup.update { s -> if (s.containerNo != clean) s else s.copy(resumed = false) }
+                _setup.update { s -> if (s.containerNo != clean) s else s.copy(scannedQuantity = 0) }
                 return@launch
             }
             // 「今天已装数」：只算今天的有效记录（已删除的、昨天的都不参与）
@@ -241,11 +244,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _setup.update { s ->
                 if (s.containerNo != clean) s
                 else s.copy(
-                    // 有已装数据才提示并填数量（防同号柜重复装）；空壳柜号只载入规则
-                    resumed = loaded > 0,
                     rules = rules,
-                    // 已装柜数量直接填入本柜数量：再扫码即超量（如需补装手动改大本柜数量）
-                    totalQuantity = if (loaded > 0) loaded.toString() else s.totalQuantity
+                    // 已扫码数量 = 今天已装正常数（只读展示，不写入计划字段）
+                    scannedQuantity = loaded,
+                    // 今天已扫过则回填已存计划（已扫码数量的拆分对象）；空壳柜号只载入规则
+                    totalQuantity = if (loaded > 0 && existing.totalQuantity > 0)
+                        existing.totalQuantity.toString() else s.totalQuantity
                 )
             }
         }
@@ -321,16 +325,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 扫码页「返回设置」：柜号 / 本柜数量 / 规则原样保留（无需重新选择/录入）。
-     * 若本柜已装齐（正常数 ≥ 本柜数量）→ 清空规则：该柜号再装按全新柜处理。
+     * 扫码页「返回设置」：柜号 / 计划装柜数量 / 规则原样保留（无需重新选择/录入）；
+     * 「已扫码数量」同步为本会话已装数（只读展示）。
+     * 若本柜已装齐（正常数 ≥ 计划装柜数量）→ 清空规则：该柜号再装按全新柜处理。
      */
     fun backToOutboundSetup() {
         alarm.stop()
         _outboundStage.value = OutboundStage.SETUP
         val st = _outbound.value
-        val done = st.activeContainer != null && st.total > 0 && st.okCount >= st.total
-        if (done) {
-            _setup.update { it.copy(rules = emptyList(), resumed = false) }
+        if (st.activeContainer == null) return
+        val done = st.total > 0 && st.okCount >= st.total
+        _setup.update {
+            it.copy(
+                rules = if (done) emptyList() else it.rules,
+                scannedQuantity = st.okCount
+            )
         }
     }
 
@@ -360,7 +369,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             )
                             LoadContainer(id = id, containerNo = s.containerNo, totalQuantity = total)
                         } else if (existing.totalQuantity != total) {
-                            // 已有柜号 → 复用会话行，不新建；本柜数量以本次填写为准
+                            // 已有柜号 → 复用会话行，不新建；计划装柜数量以本次填写为准
                             val updated = existing.copy(totalQuantity = total)
                             containerDao.update(updated)
                             updated
@@ -401,8 +410,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         totalRecords = counts.total,
                         lastMessage = when {
                             total > 0 && counts.ok >= total ->
-                                "该柜已装齐（${counts.ok}/$total）：再扫码将提示超量"
-                            counts.total > 0 -> "继续装柜：已扫 ${counts.total} 条"
+                                "该柜已装齐：已扫码 ${counts.ok} / 计划 $total；再扫码将提示超量"
+                            total > 0 && counts.ok > 0 ->
+                                "继续装柜：已扫码 ${counts.ok} / 计划 $total"
+                            counts.ok > 0 ->
+                                "继续装柜：已扫码 ${counts.ok} 件（计划不限）"
+                            counts.total > 0 -> "继续装柜：今天已录 ${counts.total} 条"
                             else -> "开始装柜：扫一个码自动保存一条"
                         }
                     )
@@ -547,7 +560,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 出库扫码校验：规则前缀（串号）→ 同柜重复 → 本柜数量（超量）→ 正常。
+     * 出库扫码校验：规则前缀（串号）→ 同柜重复 → 计划装柜数量（超量）→ 正常。
      * 全程持有 outboundMutex：快速连扫按枪序处理，不丢计数；校验与写入之间无并发窗口。
      */
     private fun handleOutboundScan(raw: String) {
@@ -590,7 +603,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         ScanResult.DUPLICATE -> "重复扫码！该条码已录入过：$barcode"
                         ScanResult.AUX -> "辅助码（不计入本柜统计）：$barcode"
-                        ScanResult.OVER_LIMIT -> "超出本柜数量（${st.total}）！条码：$barcode"
+                        ScanResult.OVER_LIMIT -> "超出计划装柜数量（${st.total}）！条码：$barcode"
                         else -> "装柜成功"
                     }
 
@@ -618,7 +631,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         else -> alarm.error()
                     }
 
-                    // 本枪刚好装齐（正常数首次达到本柜数量）→ 追加一行到装柜完成汇总 + 置完成事件（界面弹一次「装柜完成」，v1.5.8）
+                    // 本枪刚好装齐（正常数首次达到计划装柜数量）→ 追加一行到装柜完成汇总 + 置完成事件（界面弹一次「装柜完成」，v1.5.8）
                     val willComplete = result == ScanResult.OK && st.total > 0 &&
                         st.okCount < st.total && st.okCount + 1 >= st.total
                     val summarySaved = if (willComplete) {

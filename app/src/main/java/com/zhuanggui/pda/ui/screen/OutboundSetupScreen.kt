@@ -54,7 +54,10 @@ import com.zhuanggui.pda.ui.RuleSpec
 
 /**
  * 出库扫码设置页（整页固定布局，规则列表在固定区域内部滚动）：
- *  - 柜号 + 本柜数量（并列一行，窄框；已有柜号自动载入规则并填入已装数量 → 进入扫码页再扫提示超量；补装需手动改大数量）
+ *  - 柜号 + 计划装柜数量（并列一行，窄框；计划 = 本批目标件数，空/0 = 不限）
+ *  - 已扫码数量：命中「今天已有装柜记录」的柜号时只读展示（自动统计，无法手改）
+ *    · 未装齐 → 继续扫码将接着计数，扫满计划数量时提示装柜完成
+ *    · 已装齐 → 再扫码提示超量（如需补装改大计划装柜数量）
  *  - 条码规则：按扫描键扫码 → 完整条码自动填入规则栏（人工删减成前缀）；也可手动录入、从规则库选择、规则库管理
  *  - 规则说明：固定小窗，内部下拉滚动查看
  *  - 规则列表：固定区域，内部下拉滚动；每条可勾「可重复扫」「计入统计」「查历史串号」
@@ -109,17 +112,22 @@ fun OutboundSetupScreen(
                 OutlinedButton(onClick = onBack) { Text("返回", fontSize = 12.sp) }
             }
 
-            if (state.resumed) {
+            if (state.scannedQuantity > 0) {
+                val plan = state.totalQuantity.toIntOrNull() ?: 0
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF9C4))) {
                     Text(
-                        "该柜号今天已有装柜记录：已装数量已填入本柜数量，再扫码会提示超量；如需补装请先改大本柜数量",
+                        if (plan > 0 && state.scannedQuantity >= plan)
+                            "该柜号今天已装齐（已扫码 ${state.scannedQuantity} / 计划 $plan）：再扫码将提示超量；如需补装请先改大「计划装柜数量」"
+                        else "该柜号今天已扫码 ${state.scannedQuantity} 件" +
+                            if (plan > 0) "（计划 $plan）：继续扫码将接着计数，扫满计划数量时提示装柜完成"
+                            else "（计划不限）：继续扫码将接着计数",
                         Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         fontSize = 13.sp
                     )
                 }
             }
 
-            // ---------- 柜号 + 本柜数量（并列） ----------
+            // ---------- 柜号 + 计划装柜数量（并列） ----------
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -136,7 +144,7 @@ fun OutboundSetupScreen(
                 OutlinedTextField(
                     value = state.totalQuantity,
                     onValueChange = onTotal,
-                    label = { Text("本柜数量") },
+                    label = { Text("计划装柜数量", fontSize = 14.sp) },
                     placeholder = { Text("0 = 不限") },
                     singleLine = true,
                     textStyle = TextStyle(fontSize = 15.sp),

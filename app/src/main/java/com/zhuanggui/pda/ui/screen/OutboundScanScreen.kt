@@ -56,7 +56,7 @@ import com.zhuanggui.pda.ui.OutboundScanState
  *  - 撤回/前进：本柜当前会话的记录操作可回退、重做（撤销扫码 / 恢复删除）
  *  - 报警弹窗（重复/串号/超量）：点确认停止报警；重复/串号/超量还可一步删除该记录
  *  - 报警三重编码（v1.5.8）：结果一律「颜色 + 图标 + 文字」同现（报警弹窗 / 计数卡 / 记录行 / 最新输出 / 完成弹窗）
- *  - 装柜完成弹窗：本柜装齐弹一次，并提示汇总行写入结果（/sdcard/ZhuangGui/装柜完成汇总.tsv）
+ *  - 装柜完成弹窗：本柜「已扫码数量」达到「计划装柜数量」时弹一次，并提示汇总行写入结果（/sdcard/ZhuangGui/装柜完成汇总.tsv）
  *  - 记录明细：重复/串号/辅助码/超量点按一步确认删除；正常记录点按需三步确认；删除均为软删除（可在
  *    回收站或「撤回」恢复）
  *  - 任意触屏操作立即停止报警
@@ -102,7 +102,7 @@ fun OutboundScanScreen(
                         when (state.lastResult) {
                             ScanResult.DUPLICATE -> "重复扫码"
                             ScanResult.SERIAL_MISMATCH -> "串号报警"
-                            ScanResult.OVER_LIMIT -> "超出本柜数量"
+                            ScanResult.OVER_LIMIT -> "超出计划装柜数量"
                             else -> "报警"
                         },
                         fontSize = 17.sp, fontWeight = FontWeight.Bold,
@@ -170,7 +170,7 @@ fun OutboundScanScreen(
             },
             text = {
                 Text(
-                    "本柜 ${state.activeContainer?.containerNo ?: ""} 已装齐：${state.okCount} / ${state.total}。\n" +
+                    "本柜 ${state.activeContainer?.containerNo ?: ""} 已装齐：已扫码 ${state.okCount} / 计划 ${state.total}。\n" +
                         (if (state.completedSummarySaved)
                             "已追加一行到 ${FileExporter.summaryDisplayPath()}。\n"
                         else
@@ -341,11 +341,22 @@ fun OutboundScanScreen(
                         }",
                         fontSize = 12.sp, color = Color.Gray
                     )
-                    val totalText = if (state.total > 0) state.total.toString() else "不限"
                     Text(
-                        "进度：${state.okCount} / $totalText    累计记录：${state.totalRecords}",
+                        "计划装柜数量：${if (state.total > 0) state.total.toString() else "不限"}",
                         fontSize = 14.sp
                     )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "已扫码数量：${state.okCount}",
+                            fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                            color = if (state.total > 0 && state.okCount >= state.total) Color(0xFF388E3C)
+                            else Color.Unspecified
+                        )
+                        Text(
+                            "  累计记录：${state.totalRecords}",
+                            fontSize = 12.sp, color = Color.Gray
+                        )
+                    }
                     Text(
                         if (state.lastFullCode.isBlank()) "每扫一码自动保存到 TSV 文件"
                         else if (state.fileSaved) "✓ 已自动保存（${FileExporter.displayPath()}/）"

@@ -48,7 +48,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     navController.navigate(Routes.OUTBOUND_SETUP)
                 },
                 onContinueLast = { no ->
-                    // 一键继续：复用设置页「柜号变更」（自动载入原规则 + 今天已装数，同号柜闭环）
+                    // 一键继续：复用设置页「柜号变更」（自动载入原规则 + 已扫码数量，计划装柜数量以已存计划回填）
                     vm.resetOutboundSetup()
                     vm.onContainerNoChange(no)
                     navController.navigate(Routes.OUTBOUND_SETUP)

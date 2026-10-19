@@ -108,7 +108,7 @@ fun HomeScreen(
             Spacer(Modifier.height(20.dp))
 
             if (lastContainerNo != null) {
-                // 继续装柜快捷入口：带出最近柜号进入设置页（自动载入原规则与今天已装数）
+                // 继续装柜快捷入口：带出最近柜号进入设置页（自动载入原规则 + 已扫码数量）
                 OutlinedButton(
                     onClick = { onContinueLast(lastContainerNo) },
                     modifier = Modifier.fillMaxWidth().height(64.dp)

@@ -10,11 +10,11 @@ import com.zhuanggui.pda.data.entity.ScanResult
  *  2. 同柜重复（已录入过；规则勾选“允许重复”时调用方传 dupCount = 0）
  *  3. 历史串号（条码曾在其他柜录入过；仅当规则勾选「查历史串号」）
  *  4. 辅助码（规则标记为不计入统计）—— 必须先于超量：辅助码不应被超量拦截
- *  5. 超量（本柜设了数量 total≥1，且今天已装正常数 okCount ≥ total）
+ *  5. 超量（本柜设了计划装柜数量 total≥1，且今天已扫码正常数 okCount ≥ total）
  *  6. 正常
  *
  * 备注：超量沿用原语义 `total in 1..okCount`：
- *  - total ≤ 0（未设数量）→ 永不超量
+ *  - total ≤ 0（未设计划装柜数量）→ 永不超量
  *  - okCount 为「今天已装正常数」（不含辅助/重复/串号，不含回收站）
  */
 fun decideScanResult(

@@ -127,7 +127,7 @@ object FileExporter {
     fun summaryDisplayPath(): String = "/sdcard/$SUMMARY_DIR/$SUMMARY_FILE"
 
     /**
-     * 装柜完成（正常数首次达到本柜数量）时，把本柜统计追加一行到
+     * 装柜完成（正常数首次达到计划装柜数量）时，把本柜统计追加一行到
      * /sdcard/ZhuangGui/装柜完成汇总.tsv（单文件累积；BOM 表头只在文件首次创建时写入）。
      * 返回 true=写入成功；失败不抛异常（无权限/存储故障时由调用方提示）。
      */

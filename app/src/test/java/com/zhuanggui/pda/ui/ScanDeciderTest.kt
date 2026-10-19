@@ -52,7 +52,7 @@ class ScanDeciderTest {
         assertEquals(ScanResult.AUX, decide(countEnabled = false, total = 5, okCount = 5))
     }
 
-    /** 已装正常数 ≥ 本柜数量 → 超量（含恰好达量后再扫） */
+    /** 已装正常数 ≥ 计划装柜数量 → 超量（含恰好达量后再扫） */
     @Test
     fun overLimit_whenOkCountReachedTotal() {
         assertEquals(ScanResult.OVER_LIMIT, decide(total = 5, okCount = 5))

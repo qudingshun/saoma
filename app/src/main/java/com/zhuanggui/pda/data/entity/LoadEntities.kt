@@ -17,7 +17,7 @@ import java.util.Date
 data class LoadContainer(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val containerNo: String,                 // 柜号（字母+数字）
-    val totalQuantity: Int = 0,              // 本柜数量（0 = 不限）
+    val totalQuantity: Int = 0,              // 计划装柜数量（0 = 不限）
     val createdAt: Date = Date(),
     val status: String = STATUS_ACTIVE       // ACTIVE / FINISHED
 ) {
