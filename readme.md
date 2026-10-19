@@ -80,12 +80,14 @@ App 端兼容（`scan/ScannerManager.kt`，换机型只改这两个列表，新�
 - 兜底：扫码页 HID 键盘模拟录入框（`HidScanField.kt`）；**同一时间只开一种输出**——广播 + 键盘双开会让同一枪产生两份数据
 - 广播来源无法校验（系统限制，审计 13）：接受为已知限制，App 收到即记 Log 留痕（`adb logcat -s ScannerManager` 可见条码内容）
 
-收不到码排查：①「扫描配置 → 已配置应用」里配置是否还在；②App 是否在前台（或进程存活）；③`adb logcat -s ScannerManager`
+收不到码排查：①「扫描配置 → 已配置应用」里配置是否还在；②App 是否在前台（或进程存活）；③`adb logcat -s ScannerManager`（系统服务偶发刷屏会挤掉日志，此时用 `adb logcat --pid <App进程号>` 过滤更稳）
 
 常用调试命令：
 
 ```
-adb logcat -s ScannerManager                                        # App 收码日志
+adb logcat -s ScannerManager                                        # App 收码日志（很少收到时换按 PID 过滤）
+adb shell pidof com.zhuanggui.pda                                   # 查 App 进程号
+adb logcat --pid <进程号>                                            # 按进程过滤日志（系统服务刷屏时最稳）
 adb shell am broadcast -a com.android.server.scannerservice.broadcast --es scannerdata "TEST123"   # 模拟扫码广播
 adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安装（数据不丢）
 ```
