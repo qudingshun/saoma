@@ -158,6 +158,7 @@ app/src/main/java/com/zhuanggui/pda/
 ## 已知现象与注意事项
 
 - 覆盖安装 = 应用进程重启（界面状态清空），**数据不丢**；卸载重装会清空 App 数据库，但 `/sdcard/ZhuangGui/` 下的文件不受影响
+- 仪器化测试 `connectedDebugAndroidTest` 跑完默认会卸载 App（清空数据库）——已在 `gradle.properties` 加 `android.injected.androidTest.leaveApksInstalledAfterRun=true` 保留安装；若曾误卸载，可用跑前快照经 `run-as` 回灌 `databases/zhuanggui.db` 恢复
 - 冷启动约 4~7 秒（PDA 性能所限）
 - 偶尔系统残留 "Application Error" 残影窗口（旧进程痕迹）：重启设备即消失，不影响使用
 - App 内「扫描」按钮为多厂商软触发兼容（CRUISE2 未验证；以物理扳机为准）
