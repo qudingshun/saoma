@@ -11,12 +11,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -30,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,12 +52,14 @@ import com.zhuanggui.pda.ui.OutboundScanState
 
 /**
  * 出库扫码界面（竖屏）：
- *  - 顶部：返回设置（可追加规则）；扫码触发以物理扳机为准（机内软触发按钮经真机验证无效，已移除——审计 15）
+ *  - 顶部：返回设置（可追加规则）+ 报警设置（蜂鸣/振动开关，v1.5.8）；扫码触发以物理扳机为准（机内软触发按钮经真机验证无效，已移除——审计 15）
  *  - 撤回/前进：本柜当前会话的记录操作可回退、重做（撤销扫码 / 恢复删除）
- *  - 报警弹窗（重复/串号/超量）：点确认停止震动；重复/串号/超量还可一步删除该记录
+ *  - 报警弹窗（重复/串号/超量）：点确认停止报警；重复/串号/超量还可一步删除该记录
+ *  - 报警三重编码（v1.5.8）：结果一律「颜色 + 图标 + 文字」同现（报警弹窗 / 计数卡 / 记录行 / 最新输出 / 完成弹窗）
+ *  - 装柜完成弹窗：本柜装齐弹一次，并提示汇总行写入结果（/sdcard/ZhuangGui/装柜完成汇总.tsv）
  *  - 记录明细：重复/串号/辅助码/超量点按一步确认删除；正常记录点按需三步确认；删除均为软删除（可在
  *    回收站或「撤回」恢复）
- *  - 任意触屏操作立即停止振动
+ *  - 任意触屏操作立即停止报警
  */
 @Composable
 fun OutboundScanScreen(
@@ -55,6 +67,10 @@ fun OutboundScanScreen(
     records: List<ScanRecord>,
     canUndo: Boolean,
     canRedo: Boolean,
+    alarmBeep: Boolean,
+    alarmVibrate: Boolean,
+    onAlarmBeep: (Boolean) -> Unit,
+    onAlarmVibrate: (Boolean) -> Unit,
     onBackToSetup: () -> Unit,
     onManual: (String) -> Unit,
     onStopAlarm: () -> Unit,
@@ -70,6 +86,7 @@ fun OutboundScanScreen(
     var ackedCompleted by rememberSaveable { mutableStateOf(0L) }        // 装柜完成弹窗：同一事件只弹一次（重建后仍防重复弹）
     var deleteTarget by remember { mutableStateOf<ScanRecord?>(null) }   // 重复/串号：一步确认
     var tripleTarget by remember { mutableStateOf<ScanRecord?>(null) }   // 正常记录：三步确认
+    var showAlarmSettings by remember { mutableStateOf(false) }          // 报警设置弹窗（蜂鸣/振动开关，v1.5.8）
 
     val errorResult = state.lastResult?.takeIf { it != ScanResult.OK && it != ScanResult.AUX }
     if (errorResult != null && ackedSeq != state.scanSeq) {
@@ -79,15 +96,19 @@ fun OutboundScanScreen(
                 onStopAlarm()
             },
             title = {
-                Text(
-                    when (state.lastResult) {
-                        ScanResult.DUPLICATE -> "重复扫码"
-                        ScanResult.SERIAL_MISMATCH -> "串号报警"
-                        ScanResult.OVER_LIMIT -> "超出本柜数量"
-                        else -> "报警"
-                    },
-                    fontSize = 17.sp, fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ResultIcon(errorResult, 20)
+                    Text(
+                        when (state.lastResult) {
+                            ScanResult.DUPLICATE -> "重复扫码"
+                            ScanResult.SERIAL_MISMATCH -> "串号报警"
+                            ScanResult.OVER_LIMIT -> "超出本柜数量"
+                            else -> "报警"
+                        },
+                        fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
             },
             text = {
                 Text(
@@ -108,7 +129,7 @@ fun OutboundScanScreen(
                 TextButton(onClick = {
                     ackedSeq = state.scanSeq
                     onStopAlarm()
-                }) { Text("知道了（停止震动）") }
+                }) { Text("知道了（停止报警）") }
             },
             dismissButton = if (state.lastResult == ScanResult.DUPLICATE ||
                 state.lastResult == ScanResult.SERIAL_MISMATCH ||
@@ -137,10 +158,23 @@ fun OutboundScanScreen(
     if (errorResult == null && state.completedEvent > 0 && state.completedEvent != ackedCompleted) {
         AlertDialog(
             onDismissRequest = { ackedCompleted = state.completedEvent },
-            title = { Text("装柜完成！", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ResultIcon(ScanResult.OK, 20)
+                    Text(
+                        "装柜完成！",
+                        fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
+            },
             text = {
                 Text(
                     "本柜 ${state.activeContainer?.containerNo ?: ""} 已装齐：${state.okCount} / ${state.total}。\n" +
+                        (if (state.completedSummarySaved)
+                            "已追加一行到 ${FileExporter.summaryDisplayPath()}。\n"
+                        else
+                            "⚠ 汇总写入失败，请检查存储权限。\n") +
                         "点「返回设置」后规则将清空，该柜号下批按全新柜处理。",
                     fontSize = 13.sp
                 )
@@ -156,6 +190,37 @@ fun OutboundScanScreen(
                     Text("留在本页", fontSize = 13.sp)
                 }
             }
+        )
+    }
+
+    // 报警设置（v1.5.8）：蜂鸣/振动开关，勾选即时生效并持久化（下次启动保持）
+    if (showAlarmSettings) {
+        AlertDialog(
+            onDismissRequest = { showAlarmSettings = false },
+            title = { Text("报警设置", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = alarmBeep, onCheckedChange = onAlarmBeep)
+                        Text("蜂鸣提醒", fontSize = 14.sp)
+                    }
+                    Text(
+                        "报警（重复/串号/超量）时循环蜂鸣；正常扫码短响一声。关闭后完全静音。",
+                        fontSize = 11.sp, color = Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = alarmVibrate, onCheckedChange = onAlarmVibrate)
+                        Text("振动提醒", fontSize = 14.sp)
+                    }
+                    Text(
+                        "报警时循环振动；触屏 / 弹窗确认 / 下一枪停振，10 秒兜底自动停。",
+                        fontSize = 11.sp, color = Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { showAlarmSettings = false }) { Text("完成") } }
         )
     }
 
@@ -230,6 +295,7 @@ fun OutboundScanScreen(
             ) {
                 Text("出库扫码", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { showAlarmSettings = true }) { Text("报警设置", fontSize = 12.sp) }
                     OutlinedButton(onClick = onBackToSetup) { Text("返回设置", fontSize = 12.sp) }
                 }
             }
@@ -296,10 +362,10 @@ fun OutboundScanScreen(
                 Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                OutCount("正常", state.okCount, Color(0xFF388E3C), Modifier.weight(1f))
-                OutCount("串号", state.mismatchCount, Color(0xFFD32F2F), Modifier.weight(1f))
-                OutCount("重复", state.duplicateCount, Color(0xFFD32F2F), Modifier.weight(1f))
-                OutCount("超量", state.overCount, Color(0xFFF57F17), Modifier.weight(1f))
+                OutCount("正常", state.okCount, Color(0xFF388E3C), ScanResult.OK, Modifier.weight(1f))
+                OutCount("串号", state.mismatchCount, Color(0xFFD32F2F), ScanResult.SERIAL_MISMATCH, Modifier.weight(1f))
+                OutCount("重复", state.duplicateCount, Color(0xFFD32F2F), ScanResult.DUPLICATE, Modifier.weight(1f))
+                OutCount("超量", state.overCount, Color(0xFFF57F17), ScanResult.OVER_LIMIT, Modifier.weight(1f))
             }
 
             // ---------- 最新输出：柜号，条码 ----------
@@ -312,7 +378,14 @@ fun OutboundScanScreen(
                         fontWeight = FontWeight.Bold,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
-                    Text(state.lastMessage, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        state.lastResult?.let { ResultIcon(it, 14) }
+                        Text(
+                            state.lastMessage,
+                            fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(start = if (state.lastResult != null) 4.dp else 0.dp)
+                        )
+                    }
                 }
             }
 
@@ -358,13 +431,20 @@ fun OutboundScanScreen(
     }
 }
 
+/** 计数卡（v1.5.8：颜色 + 图标 + 文字三重编码，不只靠颜色区分） */
 @Composable
-private fun OutCount(label: String, count: Int, color: Color, modifier: Modifier = Modifier) {
+private fun OutCount(label: String, count: Int, color: Color, result: ScanResult, modifier: Modifier = Modifier) {
     Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = Color.White)) {
         Column(
             Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Icon(
+                imageVector = resultIcon(result),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(14.dp)
+            )
             Text(count.toString(), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = color)
             Text(label, fontSize = 11.sp)
         }
@@ -392,14 +472,25 @@ private fun RecordRow(
             .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            tag,
-            fontSize = 11.sp,
-            color = Color.White,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .background(tagColor)
                 .padding(horizontal = 5.dp, vertical = 1.dp)
-        )
+        ) {
+            Icon(
+                imageVector = resultIcon(r.result),
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(11.dp)
+            )
+            Text(
+                tag,
+                fontSize = 11.sp,
+                color = Color.White,
+                modifier = Modifier.padding(start = 3.dp)
+            )
+        }
         Text(
             "  ${r.fullCode}",
             fontSize = 13.sp,
@@ -410,4 +501,46 @@ private fun RecordRow(
             Text("点按删除", fontSize = 10.sp, color = Color.Gray)
         }
     }
+}
+
+// ---------- 报警三重编码（v1.5.8）：颜色 + 图标 + 文字同现，不只靠颜色区分 ----------
+
+/** 结果色（与计数卡/记录行标签一致；报警弹窗、最新输出、完成弹窗的图标 tint 也取自这里） */
+private fun resultColor(result: ScanResult): Color = when (result) {
+    ScanResult.OK -> Color(0xFF388E3C)
+    ScanResult.SERIAL_MISMATCH, ScanResult.DUPLICATE -> Color(0xFFD32F2F)
+    ScanResult.OVER_LIMIT -> Color(0xFFF57F17)
+    ScanResult.AUX -> Color(0xFF1976D2)
+    else -> Color.Gray
+}
+
+/** 结果图标（Material 内置矢量图标，不依赖设备字体/表情符号） */
+private fun resultIcon(result: ScanResult): ImageVector = when (result) {
+    ScanResult.OK -> Icons.Filled.CheckCircle
+    ScanResult.DUPLICATE -> Icons.Filled.Refresh
+    ScanResult.SERIAL_MISMATCH -> Icons.Filled.Warning
+    ScanResult.OVER_LIMIT -> Icons.Filled.AddCircle
+    ScanResult.AUX -> Icons.Filled.Info
+    else -> Icons.Filled.Warning
+}
+
+/** 结果文字（无障碍朗读 + 报警三重编码的「文字」通道） */
+private fun resultLabel(result: ScanResult): String = when (result) {
+    ScanResult.OK -> "正常"
+    ScanResult.SERIAL_MISMATCH -> "串号"
+    ScanResult.DUPLICATE -> "重复"
+    ScanResult.OVER_LIMIT -> "超量"
+    ScanResult.AUX -> "辅助"
+    else -> "提示"
+}
+
+/** 结果图标（tint = 结果色；contentDescription = 结果文字，读屏可听） */
+@Composable
+private fun ResultIcon(result: ScanResult, sizeDp: Int) {
+    Icon(
+        imageVector = resultIcon(result),
+        contentDescription = resultLabel(result),
+        tint = resultColor(result),
+        modifier = Modifier.size(sizeDp.dp)
+    )
 }

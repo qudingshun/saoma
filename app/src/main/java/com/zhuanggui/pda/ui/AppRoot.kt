@@ -95,6 +95,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             val outbound by vm.outbound.collectAsStateWithLifecycle()
             val outboundRecords by vm.outboundRecords.collectAsStateWithLifecycle()
             val undoRedo by vm.undoRedo.collectAsStateWithLifecycle()
+            val alarmBeep by vm.alarmBeep.collectAsStateWithLifecycle()
+            val alarmVibrate by vm.alarmVibrate.collectAsStateWithLifecycle()
             // 进程被杀恢复：导航栈还原在扫码页，但 ViewModel 已重置（activeContainer 为空）
             // 正常流程进入本页时 activeContainer 必非空（startOutboundScan 成功后才导航），不会误触发
             if (outbound.activeContainer == null) {
@@ -118,7 +120,11 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     onUndo = vm::undoLastRecordOp,
                     onRedo = vm::redoLastRecordOp,
                     canUndo = undoRedo.undoCount > 0,
-                    canRedo = undoRedo.redoCount > 0
+                    canRedo = undoRedo.redoCount > 0,
+                    alarmBeep = alarmBeep,
+                    alarmVibrate = alarmVibrate,
+                    onAlarmBeep = vm::setAlarmBeep,
+                    onAlarmVibrate = vm::setAlarmVibrate
                 )
             }
         }

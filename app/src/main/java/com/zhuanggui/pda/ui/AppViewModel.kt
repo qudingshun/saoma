@@ -83,7 +83,8 @@ data class OutboundScanState(
     val screenColor: Color = Color.White,
     val fileSaved: Boolean = false,            // 最近一次自动落盘是否成功
     val totalRecords: Int = 0,                 // 本柜累计记录数
-    val completedEvent: Long = 0               // 装柜完成事件 = 装齐那一枪的 scanSeq（0 = 未触发；界面弹一次完成弹窗）
+    val completedEvent: Long = 0,              // 装柜完成事件 = 装齐那一枪的 scanSeq（0 = 未触发；界面弹一次完成弹窗）
+    val completedSummarySaved: Boolean = false // 装柜完成汇总行是否写入成功（完成弹窗里提示，v1.5.8）
 )
 
 /** 扫码页「撤回 / 前进」状态（栈深度） */
@@ -105,8 +106,9 @@ private data class RecordOp(val kind: Kind, val ids: List<Long>) {
  *    快速连扫不会丢计数，两枪同码第二枪必判重复
  *  - 状态更新一律用 [MutableStateFlow.update]（基于最新值计算），不再用旧快照 copy
  *
- * 报警要点（v1.4.0）：
- *  - 重复/串号/超量为循环振动，触屏 / 弹窗确认 / 下一枪 / 删除记录 / 退出扫码页都会立即停止
+ * 报警要点（v1.4.0，v1.5.8 起蜂鸣/振动可在扫码页「报警设置」分别开关）：
+ *  - 重复/串号为循环蜂鸣 + 循环振动，触屏 / 弹窗确认 / 下一枪 / 删除记录 / 退出扫码页都会立即停止；10 秒兜底自动停
+ *  - 装柜完成（正常数首次装齐）：追加一行到 /sdcard/ZhuangGui/装柜完成汇总.tsv，界面弹一次完成弹窗（v1.5.8）
  *  - 记录删除一律进回收站（软删），可「撤回/前进」或到回收站恢复；正常记录删除需三步确认
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -432,6 +434,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         alarm.stop()
     }
 
+    // ---------- 扫码页「报警设置」（v1.5.8：蜂鸣 / 振动开关，即时生效 + 持久化） ----------
+
+    /** 报警蜂鸣开关（默认开） */
+    private val _alarmBeep = MutableStateFlow(alarm.beepEnabled)
+    val alarmBeep: StateFlow<Boolean> = _alarmBeep.asStateFlow()
+
+    /** 报警振动开关（默认开） */
+    private val _alarmVibrate = MutableStateFlow(alarm.vibrateEnabled)
+    val alarmVibrate: StateFlow<Boolean> = _alarmVibrate.asStateFlow()
+
+    fun setAlarmBeep(enabled: Boolean) {
+        alarm.beepEnabled = enabled
+        _alarmBeep.value = enabled
+    }
+
+    fun setAlarmVibrate(enabled: Boolean) {
+        alarm.vibrateEnabled = enabled
+        _alarmVibrate.value = enabled
+    }
+
     /**
      * 删除一条记录（扫码页）：正常/重复/串号/辅助码/超量均可删。
      *  - 正常记录由界面走「三步确认」后调用；重复/串号/辅助码/超量一步确认（报警弹窗或点按行）
@@ -589,22 +611,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     // 每扫一码自动落盘（增量追加一行）
                     val saved = withContext(Dispatchers.IO) { FileExporter.append(record) }
 
-                    // 报警反馈（重复/串号/超量 = 循环振动，直到被确认/触屏/下一枪/删除）
+                    // 报警反馈（重复/串号/超量 = 循环蜂鸣 + 循环振动，直到被确认/触屏/下一枪/删除）
                     when (result) {
                         ScanResult.OK, ScanResult.AUX -> alarm.success()
                         ScanResult.OVER_LIMIT -> alarm.overLimit()
                         else -> alarm.error()
                     }
 
+                    // 本枪刚好装齐（正常数首次达到本柜数量）→ 追加一行到装柜完成汇总 + 置完成事件（界面弹一次「装柜完成」，v1.5.8）
+                    val willComplete = result == ScanResult.OK && st.total > 0 &&
+                        st.okCount < st.total && st.okCount + 1 >= st.total
+                    val summarySaved = if (willComplete) {
+                        withContext(Dispatchers.IO) {
+                            FileExporter.appendCompletion(
+                                containerNo = container.containerNo,
+                                total = st.total,
+                                ok = st.okCount + 1,
+                                mismatch = st.mismatchCount,
+                                duplicate = st.duplicateCount,
+                                over = st.overCount,
+                                totalRecords = st.totalRecords + 1
+                            )
+                        }
+                    } else false
+
                     _outbound.update { cur ->
                         // 已切换柜号（期间返回设置页重新装柜）→ 丢弃过期更新
                         if (cur.activeContainer?.id != container.id) cur
                         else cur.copy(
                             okCount = if (result == ScanResult.OK) cur.okCount + 1 else cur.okCount,
-                            // 本枪刚好装齐（正常数首次达到本柜数量）→ 置完成事件，界面弹一次「装柜完成」
-                            completedEvent = if (result == ScanResult.OK && cur.total > 0 &&
-                                cur.okCount < cur.total && cur.okCount + 1 >= cur.total
-                            ) cur.scanSeq + 1 else cur.completedEvent,
+                            completedEvent = if (willComplete) cur.scanSeq + 1 else cur.completedEvent,
+                            completedSummarySaved = if (willComplete) summarySaved else cur.completedSummarySaved,
                             mismatchCount = if (result == ScanResult.SERIAL_MISMATCH)
                                 cur.mismatchCount + 1 else cur.mismatchCount,
                             duplicateCount = if (result == ScanResult.DUPLICATE)

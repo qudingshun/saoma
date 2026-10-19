@@ -23,6 +23,7 @@ import java.util.Locale
  *
  *   /sdcard/ZhuangGui/装柜记录/yyyy-MM-dd/柜号.tsv   —— 未删除（活动）记录
  *   /sdcard/ZhuangGui/回收站/yyyy-MM-dd/柜号.tsv     —— 已删除（软删除）记录
+ *   /sdcard/ZhuangGui/装柜完成汇总.tsv               —— 每装齐一柜追加一行汇总（v1.5.8）
  *
  * - 每扫一码调用 append() 增量写一行（不重写全文件）
  * - 删除 / 撤回 / 恢复后调用 syncDay() 按数据库重写当天两侧文件，保持与 APP 动作一致：
@@ -45,6 +46,11 @@ object FileExporter {
     private fun fmtTime(d: Date): String = timeFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
 
     private const val HEADER = "时间\t柜号\t条码\t完整码\t结果\n"
+
+    /** 装柜完成汇总：单文件累积，每装齐一柜追加一行 */
+    private const val SUMMARY_DIR = "ZhuangGui"
+    private const val SUMMARY_FILE = "装柜完成汇总.tsv"
+    private const val SUMMARY_HEADER = "完成时间\t柜号\t计划数量\t正常\t串号\t重复\t超量\t记录总数\n"
 
     /** 根目录（PDA 文件管理器里直接可找） */
     fun rootDir(): File = File(Environment.getExternalStorageDirectory(), ROOT_DIR)
@@ -114,6 +120,44 @@ object FileExporter {
             file.outputStream().use { it.write("\uFEFF$HEADER".toByteArray(Charsets.UTF_8)) }
         }
         FileOutputStream(file, true).use { it.write(lineOf(record).toByteArray(Charsets.UTF_8)) }
+        true
+    }.getOrDefault(false)
+
+    /** 装柜完成汇总文件在文件管理器里的展示路径 */
+    fun summaryDisplayPath(): String = "/sdcard/$SUMMARY_DIR/$SUMMARY_FILE"
+
+    /**
+     * 装柜完成（正常数首次达到本柜数量）时，把本柜统计追加一行到
+     * /sdcard/ZhuangGui/装柜完成汇总.tsv（单文件累积；BOM 表头只在文件首次创建时写入）。
+     * 返回 true=写入成功；失败不抛异常（无权限/存储故障时由调用方提示）。
+     */
+    fun appendCompletion(
+        containerNo: String,
+        total: Int,
+        ok: Int,
+        mismatch: Int,
+        duplicate: Int,
+        over: Int,
+        totalRecords: Int
+    ): Boolean = runCatching {
+        val dir = File(Environment.getExternalStorageDirectory(), SUMMARY_DIR)
+        if (!dir.exists() && !dir.mkdirs()) return false
+        val file = File(dir, SUMMARY_FILE)
+        if (!file.exists()) {
+            file.outputStream().use { it.write("\uFEFF$SUMMARY_HEADER".toByteArray(Charsets.UTF_8)) }
+        }
+        val line = buildString {
+            append(fmtTime(Date()))
+            append('\t'); append(containerNo)
+            append('\t'); append(total)
+            append('\t'); append(ok)
+            append('\t'); append(mismatch)
+            append('\t'); append(duplicate)
+            append('\t'); append(over)
+            append('\t'); append(totalRecords)
+            append('\n')
+        }
+        FileOutputStream(file, true).use { it.write(line.toByteArray(Charsets.UTF_8)) }
         true
     }.getOrDefault(false)
 
