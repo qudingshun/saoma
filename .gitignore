@@ -8,3 +8,8 @@ build/
 .externalNativeBuild
 .cxx
 local.properties
+
+# 签名：密码文件不入库（keystore 本体在仓库外 E:\saoma-keystore）
+keystore.properties
+*.jks
+*.keystore

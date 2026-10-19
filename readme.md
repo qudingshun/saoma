@@ -2,7 +2,7 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回。
 
-**当前版本：v1.5.5（versionCode 12，数据库 v9）** ｜ 状态：已装机运行，待按文末清单现场验收
+**当前版本：v1.5.6（versionCode 13，数据库 v9）** ｜ 状态：签名体系已就绪（debug / release 同钥匙）；设备签名身份一次性切换待 PDA 接入后执行
 
 ## 功能与操作流程
 
@@ -96,9 +96,11 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
-- 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序与边界，8 项单测）
-- 产物：`app\build\outputs\apk\debug\app-debug.apk`（debug 免签名）
+- 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序与边界，8 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
+- 签名：项目专用 keystore 在**仓库外** `E:\saoma-keystore\zhuanggui-release.jks`；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装（需 `run-as` 排障时装 debug）
+- ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份（备份说明随 keystore 目录）；**换签名身份 = 设备需卸载重装**（先快照、装后用快照回灌，见 `子项目计划.md`）
 - 装机：`adb install -r app-debug.apk`；桌面名「成品出库」
 - Room schema 快照导出在 `app\schemas\`（随版本提交，便于迁移核对）
 - 远程仓库（私有）：`https://github.com/qudingshun/saoma` —— 推送 `git push origin main`（旧 v1.2.0 快照保留在 `legacy-v1.2.0` 标签）
@@ -108,7 +110,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 
 - Kotlin + Jetpack Compose（单 Activity 导航）；Room（带版本迁移）；Apache POI（仅规则源导入解析 .xlsx/.xls 用）；无后端、无网络，多台 PDA 各自独立
 
-数据库 v8（`data/AppDatabase.kt`）：
+数据库 v9（`data/AppDatabase.kt`）：
 
 ```
 load_containers  装柜会话（柜号唯一：同号柜永远复用同一行；id 关联规则与记录）
@@ -120,7 +122,8 @@ rule_library     规则库（prefix 唯一 + name）
 ```
 迁移：v1→v2 工单表加备注；v2→v3 建出库三表；v3→v4 空操作（Excel 工单下架，旧表保留）；
      v4→v5 建规则库表；v5→v6 scan_records 加 deletedAt；v6→v7 load_rules 加双码机选项；
-     v7→v8 load_rules 加 checkHistory
+     v7→v8 load_rules 加 checkHistory；v8→v9 scan_records 加 barcode 索引
+迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9 单步 + 5→9 全链，真机运行）
 ```
 
 `ScanResult`：`OK / NOT_IN_LIST（历史遗留）/ OVER_LIMIT / SERIAL_MISMATCH / DUPLICATE / AUX`
@@ -129,7 +132,7 @@ rule_library     规则库（prefix 唯一 + name）
 
 ```
 app/src/main/java/com/zhuanggui/pda/
-├── data/        实体 LoadEntities.kt / ScanResult.kt、DAO LoadDaos.kt、AppDatabase.kt（v8 + 全部迁移）
+├── data/        实体 LoadEntities.kt / ScanResult.kt、DAO LoadDaos.kt、AppDatabase.kt（v9 + 全部迁移）
 ├── scan/        AlarmManager（循环振动 + 10s 兜底）、ScannerManager（广播采集，多厂商兼容）
 ├── importer/    RuleSourceImporter.kt（规则源解析）
 ├── export/      FileExporter.kt（TSV 落盘 + 文件回收站 + 存储权限）
@@ -145,6 +148,7 @@ app/src/main/java/com/zhuanggui/pda/
 
 ## 版本历史
 
+- **v1.5.6（versionCode 13，DB v9）**：工程（审计 31）——release 签名体系：自建项目专用 keystore（仓库外保管、密码不入库）；release 开签名 + 补 POI/log4j 混淆豁免，`assembleRelease` 出混淆签名包；debug 与 release 同钥匙（同机无缝互装、升级不丢数据）；设备一次性签名身份切换（卸载重装 + 快照回灌）待 PDA 接入执行
 - **v1.5.5（versionCode 12，DB v9）**：子项目波次 3（数据与性能）——扫码记录表加 barcode 索引（每条码查重 / 查历史串号不再全表扫描；DB v8→v9 升级时自动迁移，真机演练 23 柜 / 25 规则 / 54 条记录原样保留）；记录页 / 回收站 / 规则库的状态流下沉到对应页面收集（离开页面约 5 秒后自动停止聚合查询，不再整场会话后台常驻）；新增真机数据库迁移测试（8→9 单步 + 5→9 全链，按 Room schema 校验）
 - **v1.5.4（versionCode 11，DB v8）**：子项目波次 2（稳定性四件套）——被杀恢复：停在扫码页时自动回设置页并提示（不会停在空扫码页）；记录页勾选集合支持重建恢复（与过滤/批量一致）；过滤态「删除本日」文案改「删除匹配 N 组」如实标注；扫码广播收到即记 Log（内容可查，来源不可校验属系统限制）；ScannerManager 改进程级单例（Application 持有，防多实例重复注册）
 - **v1.5.3（versionCode 10，DB v8）**：子项目波次 1（审计 9 项收尾）——扫码页记录头改「共 N 条 · 最近 N 条可点按删除」；勾选框触控目标恢复 48dp；报警底色覆盖状态栏；落盘路径文案统一取自 FileExporter；时间格式化统一 java.time；首页返回自动复检存储授权（未授权红字提示）；规则库新增重名提示阻止；Manifest 清理（删相机特征 / READ 权限、关备份）；仓库清理（删测试截图与旧 zip）

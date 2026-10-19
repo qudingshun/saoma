@@ -11,3 +11,7 @@
 -keep class org.apache.xmlbeans.** { *; }
 -dontwarn org.openxmlformats.**
 -dontwarn org.apache.xmlbeans.**
+
+# log4j（POI 5.x 的传递依赖）里的可选 OSGi / bnd 集成，App 用不到（R8 missing_rules 生成）
+-dontwarn aQute.bnd.annotation.**
+-dontwarn org.osgi.framework.**
