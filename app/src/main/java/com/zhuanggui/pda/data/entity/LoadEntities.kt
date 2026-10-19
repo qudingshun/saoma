@@ -65,7 +65,7 @@ data class LoadRule(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("containerId")]
+    indices = [Index("containerId"), Index("barcode")]   // barcode 索引（v9）：查重 / 查历史串号提速
 )
 data class ScanRecord(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

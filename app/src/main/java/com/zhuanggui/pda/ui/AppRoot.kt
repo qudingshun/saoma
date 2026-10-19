@@ -34,23 +34,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // 出库扫码
-    val setup by vm.setup.collectAsStateWithLifecycle()
-    val outbound by vm.outbound.collectAsStateWithLifecycle()
-    val outboundRecords by vm.outboundRecords.collectAsStateWithLifecycle()
-
-    // 扫码记录（按日期+柜号聚合）
-    val recordGroups by vm.recordGroups.collectAsStateWithLifecycle()
-    val selectedGroup by vm.selectedGroup.collectAsStateWithLifecycle()
-    val selectedGroupRecords by vm.selectedGroupRecords.collectAsStateWithLifecycle()
-    val trashRecords by vm.trashRecords.collectAsStateWithLifecycle()
-    val undoRedo by vm.undoRedo.collectAsStateWithLifecycle()
-
-    // 规则库（规则源导入 / 规则编辑 / 规则选择）
-    val ruleLibrary by vm.ruleLibrary.collectAsStateWithLifecycle()
-    val ruleImporting by vm.ruleImporting.collectAsStateWithLifecycle()
-    val ruleLibMessage by vm.ruleLibMessage.collectAsStateWithLifecycle()
-
+    // 注：各状态流下沉到对应目的地收集（v1.5.5）——离开页面后 WhileSubscribed(5000) 才会真正停止上游查询，
+    // 避免记录页 / 回收站的聚合查询在整个前台会话常驻（每扫一码都会重跑全表 GROUP BY）。
     NavHost(navController = navController, startDestination = Routes.HOME) {
 
         // ---------- 首页 ----------
@@ -66,6 +51,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 出库扫码：设置 ----------
         composable(Routes.OUTBOUND_SETUP) {
+            val setup by vm.setup.collectAsStateWithLifecycle()
+            val ruleLibrary by vm.ruleLibrary.collectAsStateWithLifecycle()
             OutboundSetupScreen(
                 state = setup,
                 library = ruleLibrary,
@@ -97,6 +84,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 出库扫码：扫码 ----------
         composable(Routes.OUTBOUND_SCAN) {
+            val outbound by vm.outbound.collectAsStateWithLifecycle()
+            val outboundRecords by vm.outboundRecords.collectAsStateWithLifecycle()
+            val undoRedo by vm.undoRedo.collectAsStateWithLifecycle()
             // 进程被杀恢复：导航栈还原在扫码页，但 ViewModel 已重置（activeContainer 为空）
             // 正常流程进入本页时 activeContainer 必非空（startOutboundScan 成功后才导航），不会误触发
             if (outbound.activeContainer == null) {
@@ -128,6 +118,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 扫码记录（两级聚合 + 删除） ----------
         composable(Routes.RECORDS) {
+            val recordGroups by vm.recordGroups.collectAsStateWithLifecycle()
+            val selectedGroup by vm.selectedGroup.collectAsStateWithLifecycle()
+            val selectedGroupRecords by vm.selectedGroupRecords.collectAsStateWithLifecycle()
             // 每次进入记录页都从一级（分组列表）开始，不残留上次的分组详情
             LaunchedEffect(Unit) { vm.openRecordGroup(null) }
             RecordsScreen(
@@ -143,6 +136,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 回收站（隐藏入口：记录页长按标题） ----------
         composable(Routes.TRASH) {
+            val trashRecords by vm.trashRecords.collectAsStateWithLifecycle()
             TrashScreen(
                 records = trashRecords,
                 onRestore = vm::restoreTrashRecord,
@@ -154,6 +148,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 规则库（规则源导入 / 规则编辑） ----------
         composable(Routes.RULE_LIBRARY) {
+            val ruleLibrary by vm.ruleLibrary.collectAsStateWithLifecycle()
+            val ruleImporting by vm.ruleImporting.collectAsStateWithLifecycle()
+            val ruleLibMessage by vm.ruleLibMessage.collectAsStateWithLifecycle()
             RulesScreen(
                 rules = ruleLibrary,
                 importing = ruleImporting,

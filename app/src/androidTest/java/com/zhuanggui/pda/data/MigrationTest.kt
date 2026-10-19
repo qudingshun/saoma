@@ -1,0 +1,167 @@
+package com.zhuanggui.pda.data
+
+import android.database.sqlite.SQLiteDatabase
+import androidx.room.testing.MigrationTestHelper
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Room 迁移测试（真机 instrumentation 运行：.\gradlew.bat :app:connectedDebugAndroidTest）
+ *
+ * 覆盖：
+ *  - v8 → v9：新增 scan_records(barcode) 索引（用导出的 8.json 建库，数据保留校验）
+ *  - v5 → v9 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→7→8→9 并按 9.json 校验。
+ */
+@RunWith(AndroidJUnit4::class)
+class MigrationTest {
+
+    @get:Rule
+    val helper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        AppDatabase::class.java
+    )
+
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @After
+    fun tearDown() {
+        context.deleteDatabase(TEST_DB)
+    }
+
+    /** v8（有 schema）→ v9：加索引、数据不丢 */
+    @Test
+    fun migrate8To9_addsBarcodeIndex() {
+        helper.createDatabase(TEST_DB, 8).use { db ->
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-8TO9', 10, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL(
+                "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt, deletedAt) " +
+                    "VALUES (1, 'C-8TO9', 'XYZ0001', 'C-8TO9，XYZ0001', 'OK', 1730000000000, NULL)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 9, true, AppDatabase.ALL_MIGRATIONS[7])
+        try {
+            db.query("SELECT COUNT(*) FROM scan_records").use { c ->
+                c.moveToFirst()
+                assertEquals(1, c.getInt(0))
+            }
+            db.query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'index_scan_records_barcode'"
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v9 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To9_fullChain() {
+        context.deleteDatabase(TEST_DB)
+        val dbFile = context.getDatabasePath(TEST_DB)
+        dbFile.parentFile?.mkdirs()
+
+        // —— v5 起点结构（与 MIGRATION_2_3 / MIGRATION_4_5 中当年的建表 SQL 一致） ——
+        SQLiteDatabase.openOrCreateDatabase(dbFile, null).use { db ->
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `load_containers` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `containerNo` TEXT NOT NULL, " +
+                    "`totalQuantity` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `status` TEXT NOT NULL)"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_load_containers_containerNo` " +
+                    "ON `load_containers` (`containerNo`)"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `load_rules` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `containerId` INTEGER NOT NULL, " +
+                    "`prefix` TEXT NOT NULL, " +
+                    "FOREIGN KEY(`containerId`) REFERENCES `load_containers`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_load_rules_containerId` ON `load_rules` (`containerId`)"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `scan_records` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `containerId` INTEGER NOT NULL, " +
+                    "`containerNo` TEXT NOT NULL, `barcode` TEXT NOT NULL, `fullCode` TEXT NOT NULL, " +
+                    "`result` TEXT NOT NULL, `scannedAt` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`containerId`) REFERENCES `load_containers`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_scan_records_containerId` ON `scan_records` (`containerId`)"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `rule_library` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `prefix` TEXT NOT NULL, " +
+                    "`name` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL)"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_rule_library_prefix` ON `rule_library` (`prefix`)"
+            )
+            // 种子数据：1 柜 + 1 规则 + 2 条扫码记录（v5 时还没有 deletedAt / 双码机三列）
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-5TO9', 100, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL("INSERT INTO load_rules (containerId, prefix) VALUES (1, 'ABC')")
+            db.execSQL(
+                "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt) " +
+                    "VALUES (1, 'C-5TO9', 'ABC0001', 'C-5TO9，ABC0001', 'OK', 1730000000000)"
+            )
+            db.execSQL(
+                "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt) " +
+                    "VALUES (1, 'C-5TO9', 'ABC0002', 'C-5TO9，ABC0002', 'OK', 1730000001000)"
+            )
+            db.version = 5
+        }
+
+        // 跑 5→6→7→8→9（起点无 schema JSON，drop 校验传 false），结束后按 9.json 全量校验
+        val db = helper.runMigrationsAndValidate(
+            TEST_DB, 9, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 8)
+        )
+        try {
+            // 数据保留
+            db.query("SELECT COUNT(*) FROM scan_records").use { c ->
+                c.moveToFirst()
+                assertEquals(2, c.getInt(0))
+            }
+            db.query("SELECT COUNT(*) FROM scan_records WHERE deletedAt IS NULL").use { c ->
+                c.moveToFirst()
+                assertEquals(2, c.getInt(0))
+            }
+            // v6~v8 新增列默认值正确（旧行为不变）
+            db.query("SELECT allowDuplicate, countEnabled, checkHistory FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+                assertEquals(1, c.getInt(1))
+                assertEquals(0, c.getInt(2))
+            }
+            // v9 barcode 索引已建立
+            db.query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'index_scan_records_barcode'"
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    private companion object {
+        const val TEST_DB = "migration-test"
+    }
+}
