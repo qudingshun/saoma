@@ -18,7 +18,6 @@ import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.export.FileExporter
 import com.zhuanggui.pda.importer.RuleSourceImporter
 import com.zhuanggui.pda.scan.AlarmManager
-import com.zhuanggui.pda.scan.ScannerManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -116,7 +115,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as ZhuangGuiApp
     private val alarm = AlarmManager(application)
 
-    private val scanner = ScannerManager(application)
+    private val scanner = app.scannerManager
 
     // ---------- 数据层 ----------
     private val containerDao = app.database.loadContainerDao()

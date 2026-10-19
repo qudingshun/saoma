@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -92,7 +93,13 @@ private fun GroupListPage(
 ) {
     var filter by rememberSaveable { mutableStateOf("") }
     var batchMode by rememberSaveable { mutableStateOf(false) }
-    var checked by remember { mutableStateOf(setOf<String>()) }
+    // 勾选集合与 filter/batchMode 一样支持重建恢复（存为 List，Bundle 可携带）
+    var checked by rememberSaveable(
+        stateSaver = listSaver<Set<String>, String>(
+            save = { it.toList() },
+            restore = { it.toSet() }
+        )
+    ) { mutableStateOf(emptySet<String>()) }
     var pending by remember { mutableStateOf<List<ScanRecordGroup>?>(null) }
 
     fun key(g: ScanRecordGroup) = "${g.dayLabel}|${g.containerId}"
@@ -216,7 +223,11 @@ private fun GroupListPage(
                             )
                             if (!batchMode) {
                                 TextButton(onClick = { pending = dayGroups }) {
-                                    Text("删除本日", fontSize = 12.sp, color = Color(0xFFD32F2F))
+                                    Text(
+                                        // 过滤态下只覆盖匹配到的分组 → 文案如实标注范围
+                                        if (filter.isBlank()) "删除本日" else "删除匹配 ${dayGroups.size} 组",
+                                        fontSize = 12.sp, color = Color(0xFFD32F2F)
+                                    )
                                 }
                             }
                         }

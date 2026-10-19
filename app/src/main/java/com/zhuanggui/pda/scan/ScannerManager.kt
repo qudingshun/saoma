@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asSharedFlow
  *  1. 官方配置广播（本项目采用，实机验证）：系统“扫描配置”为应用下发广播，
  *     实测 action = com.android.server.scannerservice.broadcast，extra = scannerdata。
  *     注意：广播由“系统扫码服务”这个外部 App 发出，必须用 RECEIVER_EXPORTED 注册才能收到。
+ *     广播来源无法校验（系统限制，任何应用都可伪造同名广播）——接受为已知限制：收到即用并记 Log 留痕。
  *  2. HID 键盘模拟（备选兜底）：扫描内容以键盘输入进入焦点控件（扫码页录入框自动获得焦点）。
  *
  * 新机型/广播动作只需在 LISTEN_ACTIONS / EXTRA_KEYS 中追加（放第一优先）。
@@ -38,7 +39,7 @@ class ScannerManager(private val context: Context) {
                 intent.getStringExtra(key)?.takeIf { it.isNotBlank() }
             }
             if (data != null) {
-                Log.d(TAG, "scan received via $action")
+                Log.d(TAG, "scan received via $action: $data")
                 _scans.tryEmit(data)
             } else {
                 Log.w(TAG, "broadcast $action has no known extra key")

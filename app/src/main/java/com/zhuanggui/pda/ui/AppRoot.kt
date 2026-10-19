@@ -1,5 +1,6 @@
 package com.zhuanggui.pda.ui
 
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -96,22 +97,33 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 出库扫码：扫码 ----------
         composable(Routes.OUTBOUND_SCAN) {
-            OutboundScanScreen(
-                state = outbound,
-                records = outboundRecords,
-                onBackToSetup = {
-                    vm.backToOutboundSetup()
-                    navController.popBackStack()
-                },
-                onManual = vm::manualOutboundScan,
-                onTrigger = vm::triggerScan,
-                onStopAlarm = vm::stopAlarm,
-                onDeleteRecord = vm::deleteRecord,
-                onUndo = vm::undoLastRecordOp,
-                onRedo = vm::redoLastRecordOp,
-                canUndo = undoRedo.undoCount > 0,
-                canRedo = undoRedo.redoCount > 0
-            )
+            // 进程被杀恢复：导航栈还原在扫码页，但 ViewModel 已重置（activeContainer 为空）
+            // 正常流程进入本页时 activeContainer 必非空（startOutboundScan 成功后才导航），不会误触发
+            if (outbound.activeContainer == null) {
+                LaunchedEffect(Unit) {
+                    Toast.makeText(context, "上次装柜会话已失效，请重新设置后开始", Toast.LENGTH_LONG).show()
+                    if (!navController.popBackStack(Routes.OUTBOUND_SETUP, inclusive = false)) {
+                        navController.navigate(Routes.OUTBOUND_SETUP)
+                    }
+                }
+            } else {
+                OutboundScanScreen(
+                    state = outbound,
+                    records = outboundRecords,
+                    onBackToSetup = {
+                        vm.backToOutboundSetup()
+                        navController.popBackStack()
+                    },
+                    onManual = vm::manualOutboundScan,
+                    onTrigger = vm::triggerScan,
+                    onStopAlarm = vm::stopAlarm,
+                    onDeleteRecord = vm::deleteRecord,
+                    onUndo = vm::undoLastRecordOp,
+                    onRedo = vm::redoLastRecordOp,
+                    canUndo = undoRedo.undoCount > 0,
+                    canRedo = undoRedo.redoCount > 0
+                )
+            }
         }
 
         // ---------- 扫码记录（两级聚合 + 删除） ----------
