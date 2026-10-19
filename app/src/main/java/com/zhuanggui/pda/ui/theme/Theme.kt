@@ -1,8 +1,6 @@
 package com.zhuanggui.pda.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -13,19 +11,15 @@ private val LightColors = lightColorScheme(
     background = Color(0xFFF5F5F5)
 )
 
-private val DarkColors = darkColorScheme(
-    primary = Color(0xFF90CAF9),
-    secondary = Color(0xFF80CBC4),
-    background = Color(0xFF121212)
-)
-
+/**
+ * 固定浅色主题（审计 23）：现场界面大量按浅色硬编码（仓储光线充足场景），
+ * 原先跟随系统深色只会得到「半深半浅」的不可用界面。如需深色，
+ * 需先把各屏硬编码色全量并入 colorScheme 再放开。
+ */
 @Composable
-fun ZhuangGuiTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit
-) {
+fun ZhuangGuiTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = LightColors,
         content = content
     )
 }

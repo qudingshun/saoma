@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -43,7 +42,7 @@ import com.zhuanggui.pda.ui.OutboundScanState
 
 /**
  * 出库扫码界面（竖屏）：
- *  - 顶部：返回设置（可追加规则）/ 触发扫描
+ *  - 顶部：返回设置（可追加规则）；扫码触发以物理扳机为准（机内软触发按钮经真机验证无效，已移除——审计 15）
  *  - 撤回/前进：本柜当前会话的记录操作可回退、重做（撤销扫码 / 恢复删除）
  *  - 报警弹窗（重复/串号/超量）：点确认停止震动；重复/串号/超量还可一步删除该记录
  *  - 记录明细：重复/串号/辅助码/超量点按一步确认删除；正常记录点按需三步确认；删除均为软删除（可在
@@ -58,7 +57,6 @@ fun OutboundScanScreen(
     canRedo: Boolean,
     onBackToSetup: () -> Unit,
     onManual: (String) -> Unit,
-    onTrigger: () -> Unit,
     onStopAlarm: () -> Unit,
     onDeleteRecord: (Long) -> Unit,
     onUndo: () -> Unit,
@@ -232,7 +230,6 @@ fun OutboundScanScreen(
             ) {
                 Text("出库扫码", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Button(onClick = onTrigger) { Text("扫描", fontSize = 12.sp) }
                     OutlinedButton(onClick = onBackToSetup) { Text("返回设置", fontSize = 12.sp) }
                 }
             }

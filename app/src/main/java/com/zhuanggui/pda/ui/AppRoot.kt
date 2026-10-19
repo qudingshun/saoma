@@ -40,9 +40,17 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
         // ---------- 首页 ----------
         composable(Routes.HOME) {
+            val lastContainerNo by vm.lastContainerNo.collectAsStateWithLifecycle()
             HomeScreen(
+                lastContainerNo = lastContainerNo,
                 onOutbound = {
                     vm.resetOutboundSetup()
+                    navController.navigate(Routes.OUTBOUND_SETUP)
+                },
+                onContinueLast = { no ->
+                    // 一键继续：复用设置页「柜号变更」（自动载入原规则 + 今天已装数，同号柜闭环）
+                    vm.resetOutboundSetup()
+                    vm.onContainerNoChange(no)
                     navController.navigate(Routes.OUTBOUND_SETUP)
                 },
                 onRecords = { navController.navigate(Routes.RECORDS) }
@@ -105,7 +113,6 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                         navController.popBackStack()
                     },
                     onManual = vm::manualOutboundScan,
-                    onTrigger = vm::triggerScan,
                     onStopAlarm = vm::stopAlarm,
                     onDeleteRecord = vm::deleteRecord,
                     onUndo = vm::undoLastRecordOp,

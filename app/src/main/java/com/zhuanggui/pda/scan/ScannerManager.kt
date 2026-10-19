@@ -67,19 +67,6 @@ class ScannerManager(private val context: Context) {
         registered = false
     }
 
-    /**
-     * 主动触发一次扫描（“扫描”按钮调用）。
-     * 依次向各厂商扫码服务发 start 广播；没装对应服务的动作会被系统忽略，无副作用。
-     * 若在真机上无效，请向东集索取 CRUISE2 扫码 SDK 文档，把正确的动作名加到 TRIGGER_ACTIONS。
-     */
-    fun triggerScan() {
-        TRIGGER_ACTIONS.forEach { action ->
-            runCatching { context.sendBroadcast(Intent(action)) }
-                .onFailure { Log.w(TAG, "trigger $action failed: ${it.message}") }
-        }
-        Log.d(TAG, "trigger scan broadcast sent: $TRIGGER_ACTIONS")
-    }
-
     companion object {
         private const val TAG = "ScannerManager"
 
@@ -96,14 +83,6 @@ class ScannerManager(private val context: Context) {
         private val EXTRA_KEYS = listOf(
             "scannerdata",                           // 东集 CRUISE2【本机实测配置】扫描配置应用的默认键值
             "value", "barcode", "barcode_value", "scan_value", "data", "result", "BarcodeStr"
-        )
-
-        /** 主动触发扫描的广播动作（无效动作会被系统忽略，可按 SDK 文档追加） */
-        private val TRIGGER_ACTIONS = listOf(
-            "android.intent.action.SCAN_START",
-            "android.intent.action.START_SCAN",
-            "android.intent.action.SCAN",
-            "com.android.scanbroadcast.START_SCAN"
         )
     }
 }

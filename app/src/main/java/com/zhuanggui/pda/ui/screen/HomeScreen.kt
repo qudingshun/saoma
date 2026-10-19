@@ -36,15 +36,18 @@ import com.zhuanggui.pda.R
 import com.zhuanggui.pda.export.FileExporter
 
 /**
- * 首页：顶部品牌 LOGO + 两个入口
+ * 首页：顶部品牌 LOGO + 入口
  *  1. 出库扫码（主流程：柜号/数量/条码规则 → 装柜扫码 → 自动落盘）
- *  2. 扫码记录查看
+ *  2. 继续装柜（快捷入口：最近有扫码记录时出现，一键带出最近的柜号续扫）
+ *  3. 扫码记录查看
  *
  * 注：老的「Excel 导入工单（防错校验）」已下架，源码存档见 archive/excel-workorder-v1.2.0/
  */
 @Composable
 fun HomeScreen(
+    lastContainerNo: String?,
     onOutbound: () -> Unit,
+    onContinueLast: (String) -> Unit,
     onRecords: () -> Unit
 ) {
     Scaffold { pad ->
@@ -63,7 +66,7 @@ fun HomeScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // logo 为透明底黑字图：套白色圆角底卡，深色模式下也清晰
+            // logo 为透明底黑字图：套白色圆角底卡（固定浅色主题见 Theme.kt）
             Image(
                 painter = painterResource(R.drawable.logo),
                 contentDescription = "惠而浦 Whirlpool",
@@ -103,6 +106,17 @@ fun HomeScreen(
             }
 
             Spacer(Modifier.height(20.dp))
+
+            if (lastContainerNo != null) {
+                // 继续装柜快捷入口：带出最近柜号进入设置页（自动载入原规则与今天已装数）
+                OutlinedButton(
+                    onClick = { onContinueLast(lastContainerNo) },
+                    modifier = Modifier.fillMaxWidth().height(64.dp)
+                ) {
+                    Text("继续装柜：$lastContainerNo", fontSize = 20.sp)
+                }
+                Spacer(Modifier.height(20.dp))
+            }
 
             OutlinedButton(
                 onClick = onRecords,

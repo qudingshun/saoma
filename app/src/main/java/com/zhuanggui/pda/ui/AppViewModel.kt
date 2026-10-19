@@ -151,6 +151,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val recordGroups: StateFlow<List<ScanRecordGroup>> = recordDao.observeDayGroups()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** 首页「继续装柜」快捷入口：最近一次有效扫码的柜号；无记录时 null（单行查询，仅首页订阅） */
+    val lastContainerNo: StateFlow<String?> = recordDao.observeLastScannedContainerNo()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _selectedGroup = MutableStateFlow<ScanRecordGroup?>(null)
     val selectedGroup: StateFlow<ScanRecordGroup?> = _selectedGroup.asStateFlow()
 
@@ -421,11 +425,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 手动录入（出库扫码页） */
     fun manualOutboundScan(barcode: String) {
         if (barcode.isNotBlank()) handleOutboundScan(barcode.trim())
-    }
-
-    /** 主动触发 PDA 扫码头扫描一次（界面"扫描"按钮） */
-    fun triggerScan() {
-        scanner.triggerScan()
     }
 
     /** 停止报警振动（触屏 / 弹窗确认 / 删除记录等调用；幂等） */

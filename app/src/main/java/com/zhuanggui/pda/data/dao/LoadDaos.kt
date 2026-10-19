@@ -137,6 +137,10 @@ interface ScanRecordDao {
     @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT :limit")
     fun observeByContainer(containerId: Long, limit: Int): Flow<List<ScanRecord>>
 
+    /** 首页「继续装柜」快捷入口：最近一次有效扫码的柜号（无记录时 null） */
+    @Query("SELECT containerNo FROM scan_records WHERE deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT 1")
+    fun observeLastScannedContainerNo(): Flow<String?>
+
     @Query("SELECT COUNT(*) FROM scan_records WHERE containerId = :containerId AND barcode = :barcode AND deletedAt IS NULL")
     suspend fun countBarcode(containerId: Long, barcode: String): Int
 
