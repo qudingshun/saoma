@@ -17,8 +17,10 @@ import org.junit.runner.RunWith
  * 覆盖：
  *  - v8 → v9：新增 scan_records(barcode) 索引（用导出的 8.json 建库，数据保留校验）
  *  - v9 → v10：scan_records 加 operatorId 列（用导出的 9.json 建库，默认值校验）
- *  - v5 → v10 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→10 并按 10.json 校验。
+ *  - v10 → v11：load_rules 加 serialMin/serialMax/ignoreRepeat，rule_library 加四个规则开关
+ *    （用导出的 10.json 建库，默认值校验）
+ *  - v5 → v11 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→11 并按 11.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -95,9 +97,50 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v10 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v10（有 schema）→ v11：规则表加流水号范围/忽略 + 规则库四个开关，历史行取旧行为默认值 */
     @Test
-    fun migrate5To10_fullChain() {
+    fun migrate10To11_addsRuleColumns() {
+        helper.createDatabase(TEST_DB, 10).use { db ->
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-10TO11', 10, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL(
+                "INSERT INTO load_rules (containerId, prefix, allowDuplicate, countEnabled, checkHistory) " +
+                    "VALUES (1, 'XYZ', 0, 1, 0)"
+            )
+            db.execSQL(
+                "INSERT INTO rule_library (prefix, name, updatedAt) VALUES ('XYZ', '型号X', 1730000000000)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, AppDatabase.ALL_MIGRATIONS[9])
+        try {
+            // load_rules：流水号范围默认空（不校验）、忽略默认关 → 行为与旧版一致
+            db.query("SELECT serialMin, serialMax, ignoreRepeat FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals("", c.getString(0))
+                assertEquals("", c.getString(1))
+                assertEquals(0, c.getInt(2))
+            }
+            // rule_library：四个开关默认 = 不可重复 / 计入统计 / 不查历史 / 不忽略
+            db.query(
+                "SELECT allowDuplicate, countEnabled, checkHistory, ignoreRepeat FROM rule_library LIMIT 1"
+            ).use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+                assertEquals(1, c.getInt(1))
+                assertEquals(0, c.getInt(2))
+                assertEquals(0, c.getInt(3))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v11 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To11_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -159,9 +202,9 @@ class MigrationTest {
             db.version = 5
         }
 
-        // 跑 5→6→…→10（起点无 schema JSON，drop 校验传 false），结束后按 10.json 全量校验
+        // 跑 5→6→…→11（起点无 schema JSON，drop 校验传 false），结束后按 11.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 10, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 9)
+            TEST_DB, 11, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 10)
         )
         try {
             // 数据保留
@@ -190,6 +233,13 @@ class MigrationTest {
             db.query("SELECT operatorId FROM scan_records LIMIT 1").use { c ->
                 c.moveToFirst()
                 assertEquals("", c.getString(0))
+            }
+            // v11 新增规则列：流水号范围默认空、忽略默认关（旧行为不变）
+            db.query("SELECT serialMin, serialMax, ignoreRepeat FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals("", c.getString(0))
+                assertEquals("", c.getString(1))
+                assertEquals(0, c.getInt(2))
             }
         } finally {
             db.close()

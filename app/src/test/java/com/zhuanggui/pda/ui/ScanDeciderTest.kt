@@ -77,4 +77,51 @@ class ScanDeciderTest {
     fun ok_whenDupAllowed_dupCountZero() {
         assertEquals(ScanResult.OK, decide(dupCount = 0))
     }
+
+    // ---------- serialInRange（v1.7.0 流水号范围） ----------
+
+    /** 上下界都留空 → 不校验流水号（旧行为不变） */
+    @Test
+    fun serial_noRange_alwaysInRange() {
+        assertEquals(true, serialInRange("0001", "", ""))
+        assertEquals(true, serialInRange("", "", ""))
+        assertEquals(true, serialInRange("ABC", "", ""))
+    }
+
+    /** 设了范围 → 前缀后必须是纯数字，且落在闭区间内 */
+    @Test
+    fun serial_withRange_checksNumericBounds() {
+        assertEquals(true, serialInRange("1", "1", "5"))
+        assertEquals(true, serialInRange("0001", "1", "5"))   // 前导零按数值比较
+        assertEquals(true, serialInRange("5", "1", "5"))      // 闭区间
+        assertEquals(false, serialInRange("6", "1", "5"))
+        assertEquals(false, serialInRange("0", "1", "5"))
+    }
+
+    /** 只设一侧：另一侧不限 */
+    @Test
+    fun serial_oneSidedRange() {
+        assertEquals(true, serialInRange("999", "1", ""))
+        assertEquals(false, serialInRange("0", "1", ""))
+        assertEquals(true, serialInRange("0", "", "5"))
+        assertEquals(false, serialInRange("6", "", "5"))
+    }
+
+    /** 前缀后不是纯数字 / 为空 → 不匹配（只有设了范围时才生效） */
+    @Test
+    fun serial_nonNumericOrEmpty_rejected_whenRangeSet() {
+        assertEquals(false, serialInRange("", "1", "5"))       // 条码 = 前缀本身
+        assertEquals(false, serialInRange("A001", "1", "5"))
+        assertEquals(false, serialInRange("001A", "1", "5"))
+        assertEquals(false, serialInRange("1.5", "1", "5"))
+    }
+
+    /** 超长流水号不溢出（BigInteger 比较） */
+    @Test
+    fun serial_veryLongNumbers_compareCorrectly() {
+        val big = "123456789012345678901234567890"
+        val bigger = "123456789012345678901234567891"
+        assertEquals(true, serialInRange(big, big, bigger))
+        assertEquals(false, serialInRange(bigger, big, big))
+    }
 }

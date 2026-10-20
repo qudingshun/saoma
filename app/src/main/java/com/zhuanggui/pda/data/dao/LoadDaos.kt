@@ -166,9 +166,9 @@ interface RuleLibDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: RuleLibEntry): Long
 
-    /** 修改（规则编辑） */
-    @Query("UPDATE rule_library SET prefix = :prefix, name = :name, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun update(id: Long, prefix: String, name: String, updatedAt: Date)
+    /** 修改（规则编辑：前缀 / 型号 / 四个开关，v1.7.0） */
+    @Update
+    suspend fun updateEntry(entry: RuleLibEntry)
 
     @Query("SELECT * FROM rule_library ORDER BY prefix")
     fun observeAll(): Flow<List<RuleLibEntry>>

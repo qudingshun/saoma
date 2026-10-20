@@ -48,26 +48,34 @@ enum class SetupScanTarget { RULE, OPERATOR }
  *  - [allowDuplicate] 允许重复扫：同码可反复扫不报“重复”（双码机的固定码）
  *  - [countEnabled] 计入统计：不勾选 = 辅助码（AUX），只留痕不计数、不占计划装柜数量
  *  - [checkHistory] 查历史串号：条码若在其他柜的记录里出现过 → 报串号（防止混入其他柜的旧箱）
+ *  - [serialMin] / [serialMax] 流水号范围（v1.7.0）：前缀之后的数字须落在范围内，空 = 该侧不限
+ *  - [ignoreRepeat] 忽略（v1.7.0）：仅「可重复扫」时生效，扫到不记录、不落盘、不计数（语音报“辅助码”）
  */
 data class RuleSpec(
     val prefix: String,
     val allowDuplicate: Boolean = false,
     val countEnabled: Boolean = true,
-    val checkHistory: Boolean = false
+    val checkHistory: Boolean = false,
+    val serialMin: String = "",
+    val serialMax: String = "",
+    val ignoreRepeat: Boolean = false
 )
 
-/** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」；v1.6.0：计划字段不再被自动改写） */
+/** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」；v1.7.0：计划随柜回显） */
 data class OutboundSetupState(
     val containerNo: String = "",
-    val totalQuantity: String = "",            // 计划装柜数量（只由人工填写；留空且命中今天已扫码的柜号 = 按该柜已存计划继续装）
+    val totalQuantity: String = "",            // 计划装柜数量（人工填写；命中已有柜号/从扫码页返回时回显已存计划）
     val rules: List<RuleSpec> = emptyList(),   // 条码规则（前缀），拼装柜可多条
     val ruleInput: String = "",
     val ruleAllowDup: Boolean = false,         // 新增规则时勾选：可重复扫
     val ruleCount: Boolean = true,             // 新增规则时勾选：计入统计
     val ruleCheckHistory: Boolean = false,     // 新增规则时勾选：查历史串号
+    val ruleSerialMin: String = "",            // 新增规则时填：流水号最小值（选填，v1.7.0）
+    val ruleSerialMax: String = "",            // 新增规则时填：流水号最大值（选填，v1.7.0）
+    val ruleIgnoreRepeat: Boolean = false,      // 新增规则时勾选：忽略（仅可重复扫时生效，v1.7.0）
     val scannedQuantity: Int = 0,              // 今天已扫码数量（只读展示，自动统计；= 已装柜数量）
-    val storedPlan: Int = 0,                   // 命中柜号的已存计划装柜数量（0 = 无/不限；仅用于提示与留空续装，不回填输入框）
-    val operatorId: String = ""                // 操作员工号（选填：扫工牌或手输；随本批记录落库落盘）
+    val storedPlan: Int = 0,                   // 命中柜号的已存计划装柜数量（0 = 无/不限；仅用于提示与留空续装兜底）
+    val operatorId: String = ""                // 操作员工号（选填：下拉 A/B/C/D 或扫工牌/手输；随本批记录落库落盘）
 )
 
 /** 出库扫码：扫码阶段状态 */
@@ -236,11 +244,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 柜号输入后（防抖 150ms）查询已有柜号：
-     *  - 柜号「今天」已有装柜记录（已删除的不参与统计）→ 自动载入原规则，
-     *    并带出「已扫码数量」（今天已装正常数，只读展示）= 已装柜数量 → 继续扫码从已扫数接着计数
-     *  - v1.6.0：计划装柜数量输入框只由人工填写，查询不再改写它；命中柜号时只记录「已存计划」
-     *    （storedPlan）用于提示，以及留空装柜时按已存计划继续（不改写输入框）
-     *  - 其余情况 → 清空展示值（保持人工填写的计划与已有规则）
+     *  - 命中已有柜号 → 载入原规则；带出「已扫码数量」（今天已装正常数，只读展示），
+     *    并回显「计划装柜数量」（v1.7.0：选择前面已有的柜号 → 显示前期存的计划装柜数量）
+     *  - 未命中 → 清空展示值与已存计划（保持人工填写的计划与已有规则）
      * 输入已变化时丢弃过期查询结果。
      */
     private fun scheduleContainerLookup(clean: String) {
@@ -259,7 +265,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // 「今天已装数」：只算今天的有效记录（已删除的、昨天的都不参与）
             val loaded = recordDao.countByResultOnDay(existing.id, ScanResult.OK.name, todayLabel())
             val rules = ruleDao.getByContainer(existing.id)
-                .map { RuleSpec(it.prefix, it.allowDuplicate, it.countEnabled, it.checkHistory) }
+                .map {
+                    RuleSpec(
+                        prefix = it.prefix,
+                        allowDuplicate = it.allowDuplicate,
+                        countEnabled = it.countEnabled,
+                        checkHistory = it.checkHistory,
+                        serialMin = it.serialMin,
+                        serialMax = it.serialMax,
+                        ignoreRepeat = it.ignoreRepeat
+                    )
+                }
                 .distinctBy { it.prefix }
             _setup.update { s ->
                 if (s.containerNo != clean) s
@@ -267,7 +283,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     rules = rules,
                     // 已扫码数量 = 今天已装正常数（只读展示，不写入计划字段）
                     scannedQuantity = loaded,
-                    // 已存计划：仅用于提示与留空续装（绝不回填输入框，避免"退出再进入被改写"）
+                    // 回显前期存的计划装柜数量（v1.7.0；该柜未设计划时保持人工输入）
+                    totalQuantity = if (existing.totalQuantity > 0) existing.totalQuantity.toString() else s.totalQuantity,
+                    // 已存计划：用于提示与留空续装兜底
                     storedPlan = existing.totalQuantity
                 )
             }
@@ -309,14 +327,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setup.update { it.copy(ruleCheckHistory = v) }
     }
 
+    /** 新增规则时填：流水号最小值（选填；与前缀组成数据范围） */
+    fun onRuleSerialMinChange(v: String) {
+        _setup.update { it.copy(ruleSerialMin = v.filter { c -> c.isDigit() }.take(12)) }
+    }
+
+    /** 新增规则时填：流水号最大值（选填） */
+    fun onRuleSerialMaxChange(v: String) {
+        _setup.update { it.copy(ruleSerialMax = v.filter { c -> c.isDigit() }.take(12)) }
+    }
+
+    /** 新增规则时的勾选：忽略（仅「可重复扫」时生效；扫到不记录、不落盘、不计数） */
+    fun onRuleIgnoreChange(v: Boolean) {
+        _setup.update { it.copy(ruleIgnoreRepeat = v) }
+    }
+
     fun addRule() {
         val prefix = _setup.value.ruleInput.trim()
         if (prefix.isEmpty()) return
         _setup.update { s ->
             if (s.rules.any { it.prefix == prefix }) s.copy(ruleInput = "")
             else s.copy(
-                rules = s.rules + RuleSpec(prefix, s.ruleAllowDup, s.ruleCount, s.ruleCheckHistory),
-                ruleInput = ""
+                rules = s.rules + RuleSpec(
+                    prefix = prefix,
+                    allowDuplicate = s.ruleAllowDup,
+                    countEnabled = s.ruleCount,
+                    checkHistory = s.ruleCheckHistory,
+                    serialMin = s.ruleSerialMin,
+                    serialMax = s.ruleSerialMax,
+                    ignoreRepeat = s.ruleAllowDup && s.ruleIgnoreRepeat
+                ),
+                ruleInput = "",
+                ruleSerialMin = "",
+                ruleSerialMax = ""
             )
         }
     }
@@ -325,26 +368,60 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setup.update { it.copy(rules = it.rules.filterNot { r -> r.prefix == rule }) }
     }
 
-    /** 列表里直接改某条规则的勾选（可重复 / 计入统计 / 查历史串号） */
-    fun updateRuleFlags(prefix: String, allowDuplicate: Boolean, countEnabled: Boolean, checkHistory: Boolean) {
+    /** 列表里直接改某条规则的勾选（可重复 / 计入统计 / 查历史串号 / 忽略） */
+    fun updateRuleFlags(
+        prefix: String,
+        allowDuplicate: Boolean,
+        countEnabled: Boolean,
+        checkHistory: Boolean,
+        ignoreRepeat: Boolean
+    ) {
         _setup.update { s ->
             s.copy(rules = s.rules.map {
                 if (it.prefix == prefix) it.copy(
                     allowDuplicate = allowDuplicate,
                     countEnabled = countEnabled,
-                    checkHistory = checkHistory
+                    checkHistory = checkHistory,
+                    ignoreRepeat = allowDuplicate && ignoreRepeat
                 )
                 else it
             })
         }
     }
 
-    /** 规则选择：把规则库里勾选的前缀批量加入本柜（自动去重；默认“不可重复 + 计入统计”，可在列表里改） */
+    /**
+     * 列表里补录/修改某条规则（含从规则库导入的）的流水号范围；
+     * 两项都留空 = 不限制。只保留数字（与录入时一致），避免非法值导致全部条码报串号。
+     */
+    fun updateRuleSerial(prefix: String, serialMin: String, serialMax: String) {
+        val mn = serialMin.filter { it.isDigit() }.take(12)
+        val mx = serialMax.filter { it.isDigit() }.take(12)
+        _setup.update { s ->
+            s.copy(rules = s.rules.map {
+                if (it.prefix == prefix) it.copy(serialMin = mn, serialMax = mx) else it
+            })
+        }
+    }
+
+    /** 规则选择：把规则库里勾选的前缀批量加入本柜（自动去重；连同库中四个开关一起复制，可在列表里改） */
     fun addRulesFromSetup(prefixes: List<String>) {
         if (prefixes.isEmpty()) return
-        _setup.update { s ->
-            val existing = s.rules.map { it.prefix }.toSet()
-            s.copy(rules = s.rules + prefixes.filterNot { it in existing }.map { RuleSpec(it) })
+        viewModelScope.launch {
+            val lib = ruleLibDao.getAll().associateBy { it.prefix }
+            _setup.update { s ->
+                val existing = s.rules.map { it.prefix }.toSet()
+                s.copy(rules = s.rules + prefixes.filterNot { it in existing }.map { p ->
+                    val e = lib[p]
+                    if (e == null) RuleSpec(p)
+                    else RuleSpec(
+                        prefix = e.prefix,
+                        allowDuplicate = e.allowDuplicate,
+                        countEnabled = e.countEnabled,
+                        checkHistory = e.checkHistory,
+                        ignoreRepeat = e.allowDuplicate && e.ignoreRepeat
+                    )
+                })
+            }
         }
     }
 
@@ -360,7 +437,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 扫码页「返回设置」：柜号 / 计划装柜数量 / 规则原样保留（无需重新选择/录入）；
-     * 「已扫码数量」同步为本会话已装数（只读展示）；已存计划同步为本会话实际计划。
+     * 「已扫码数量」同步为本会话已装数（只读展示）；「计划装柜数量」回显本次会话实际计划（v1.7.0）。
      * 若本柜已装齐（正常数 ≥ 计划装柜数量）→ 清空规则：该柜号再装按全新柜处理。
      */
     fun backToOutboundSetup() {
@@ -374,6 +451,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 rules = if (done) emptyList() else it.rules,
                 scannedQuantity = st.okCount,
+                // v1.7.0：从扫码页返回 → 显示上次设置的计划装柜数量（会话计划>0 时回显）
+                totalQuantity = if (st.total > 0) st.total.toString() else it.totalQuantity,
                 storedPlan = st.total
             )
         }
@@ -426,7 +505,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                     prefix = it.prefix,
                                     allowDuplicate = it.allowDuplicate,
                                     countEnabled = it.countEnabled,
-                                    checkHistory = it.checkHistory
+                                    checkHistory = it.checkHistory,
+                                    serialMin = it.serialMin,
+                                    serialMax = it.serialMax,
+                                    ignoreRepeat = it.ignoreRepeat
                                 )
                             )
                         }
@@ -490,24 +572,51 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         alarm.stop()
     }
 
-    // ---------- 扫码页「报警设置」（v1.5.8：蜂鸣 / 振动开关，即时生效 + 持久化） ----------
+    // ---------- 扫码页「震动和声音设置」（v1.7.0：正常/非正常分组，开关 + 震动强度 + 语音朗读） ----------
 
-    /** 报警蜂鸣开关（默认开） */
-    private val _alarmBeep = MutableStateFlow(alarm.beepEnabled)
-    val alarmBeep: StateFlow<Boolean> = _alarmBeep.asStateFlow()
+    /** 正常扫码蜂鸣开关（默认开） */
+    private val _alarmSoundOk = MutableStateFlow(alarm.soundOkEnabled)
+    val alarmSoundOk: StateFlow<Boolean> = _alarmSoundOk.asStateFlow()
 
-    /** 报警振动开关（默认开） */
-    private val _alarmVibrate = MutableStateFlow(alarm.vibrateEnabled)
-    val alarmVibrate: StateFlow<Boolean> = _alarmVibrate.asStateFlow()
+    /** 非正常扫码（串号/重复/超量）蜂鸣开关（默认开） */
+    private val _alarmSoundError = MutableStateFlow(alarm.soundErrorEnabled)
+    val alarmSoundError: StateFlow<Boolean> = _alarmSoundError.asStateFlow()
 
-    fun setAlarmBeep(enabled: Boolean) {
-        alarm.beepEnabled = enabled
-        _alarmBeep.value = enabled
+    /** 正常扫码振动强度（0=关…3=强） */
+    private val _alarmVibOk = MutableStateFlow(alarm.vibrateOkLevel)
+    val alarmVibOk: StateFlow<Int> = _alarmVibOk.asStateFlow()
+
+    /** 非正常扫码振动强度（0=关…3=强） */
+    private val _alarmVibError = MutableStateFlow(alarm.vibrateErrorLevel)
+    val alarmVibError: StateFlow<Int> = _alarmVibError.asStateFlow()
+
+    /** 语音朗读开关（默认开：正常读出「已扫码，N」；辅助码/忽略读出「辅助码」） */
+    private val _alarmSpeak = MutableStateFlow(alarm.speakEnabled)
+    val alarmSpeak: StateFlow<Boolean> = _alarmSpeak.asStateFlow()
+
+    fun setAlarmSoundOk(enabled: Boolean) {
+        alarm.soundOkEnabled = enabled
+        _alarmSoundOk.value = enabled
     }
 
-    fun setAlarmVibrate(enabled: Boolean) {
-        alarm.vibrateEnabled = enabled
-        _alarmVibrate.value = enabled
+    fun setAlarmSoundError(enabled: Boolean) {
+        alarm.soundErrorEnabled = enabled
+        _alarmSoundError.value = enabled
+    }
+
+    fun setAlarmVibOk(level: Int) {
+        alarm.vibrateOkLevel = level
+        _alarmVibOk.value = alarm.vibrateOkLevel
+    }
+
+    fun setAlarmVibError(level: Int) {
+        alarm.vibrateErrorLevel = level
+        _alarmVibError.value = alarm.vibrateErrorLevel
+    }
+
+    fun setAlarmSpeak(enabled: Boolean) {
+        alarm.speakEnabled = enabled
+        _alarmSpeak.value = enabled
     }
 
     /**
@@ -617,8 +726,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val st = _outbound.value
                     val container = st.activeContainer ?: return@withLock
 
-                    val matchedSpecs = st.rules.filter { barcode.startsWith(it.prefix) }
+                    // 前缀匹配 + 流水号范围（v1.7.0 第 1 条：规则可限定流水号区间；未填范围则不校验）
+                    val prefixSpecs = st.rules.filter { barcode.startsWith(it.prefix) }
+                    val matchedSpecs = prefixSpecs.filter {
+                        serialInRange(barcode.removePrefix(it.prefix), it.serialMin, it.serialMax)
+                    }
                     val matched = st.rules.isEmpty() || matchedSpecs.isNotEmpty()
+                    val rangeFiltered = prefixSpecs.isNotEmpty() && matchedSpecs.isEmpty()
+
+                    // 忽略（v1.7.0 第 6 条）：可重复扫且勾选「忽略」的条码 → 不记录、不落盘、不计数，
+                    // 仅正常反馈 + 语音提示「辅助码」（双码机固定码不再堆积噪声记录）
+                    val ignored = matchedSpecs.any { it.allowDuplicate && it.ignoreRepeat }
+                    if (ignored) {
+                        alarm.success()
+                        alarm.speakAux()
+                        _outbound.update { cur ->
+                            if (cur.activeContainer?.id != container.id) cur
+                            else cur.copy(
+                                lastFullCode = "${container.containerNo}，$barcode",
+                                lastBarcode = barcode,
+                                lastMessage = "辅助码（忽略，不记录）：$barcode",
+                                lastResult = ScanResult.AUX,
+                                lastRecordId = 0,
+                                scanSeq = cur.scanSeq + 1,
+                                screenColor = Color(0xFFE3F2FD)
+                            )
+                        }
+                        return@withLock
+                    }
+
                     val allowDup = matchedSpecs.any { it.allowDuplicate }
                     val countEnabled = matchedSpecs.isEmpty() || matchedSpecs.any { it.countEnabled }
                     val dupCount = if (allowDup) 0 else recordDao.countBarcode(container.id, barcode)
@@ -637,12 +773,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     val message = when (result) {
                         ScanResult.SERIAL_MISMATCH ->
-                            if (historyHit != null) {
-                                "串号报警！该条码已于 " +
-                                    SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(historyHit.scannedAt) +
-                                    " 在柜 ${historyHit.containerNo} 录入过，请核实是否混入本柜"
-                            } else {
-                                "串号报警！条码不符合本柜规则：$barcode"
+                            when {
+                                historyHit != null ->
+                                    "串号报警！该条码已于 " +
+                                        SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(historyHit.scannedAt) +
+                                        " 在柜 ${historyHit.containerNo} 录入过，请核实是否混入本柜"
+                                rangeFiltered -> {
+                                    // v1.7.0：把规则的流水号范围带进提示，方便现场核对（多前缀命中时取最长前缀）
+                                    val spec = prefixSpecs.maxByOrNull { it.prefix.length }
+                                    val range = when {
+                                        spec == null -> ""
+                                        spec.serialMin.isNotBlank() && spec.serialMax.isNotBlank() ->
+                                            "${spec.serialMin}~${spec.serialMax}"
+                                        spec.serialMin.isNotBlank() -> "≥${spec.serialMin}"
+                                        spec.serialMax.isNotBlank() -> "≤${spec.serialMax}"
+                                        else -> ""
+                                    }
+                                    val suffix = if (range.isBlank()) "" else "（$range）"
+                                    "串号报警！条码流水号不在规则范围$suffix：$barcode"
+                                }
+                                else -> "串号报警！条码不符合本柜规则：$barcode"
                             }
                         ScanResult.DUPLICATE -> "重复扫码！该条码已录入过：$barcode"
                         ScanResult.AUX -> "辅助码（不计入本柜统计）：$barcode"
@@ -669,8 +819,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val saved = withContext(Dispatchers.IO) { FileExporter.append(record) }
 
                     // 报警反馈（重复/串号/超量 = 循环蜂鸣 + 循环振动，直到被确认/触屏/下一枪/删除）
+                    // + 语音朗读（v1.7.0 第 7 条：正常读出「已扫码，N」，辅助码读出「辅助码」）
                     when (result) {
-                        ScanResult.OK, ScanResult.AUX -> alarm.success()
+                        ScanResult.OK -> {
+                            alarm.success()
+                            alarm.speakOk(st.okCount + 1)
+                        }
+                        ScanResult.AUX -> {
+                            alarm.success()
+                            alarm.speakAux()
+                        }
                         ScanResult.OVER_LIMIT -> alarm.overLimit()
                         else -> alarm.error()
                     }
@@ -763,29 +921,75 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ==================== 规则库 ====================
 
-    /** 规则编辑：新增（id = null）或修改一条库中规则 */
-    fun saveLibRule(id: Long?, prefixInput: String, name: String) {
-        val prefix = RuleSourceImporter.cleanPrefix(prefixInput)
-        if (prefix == null) {
+    /**
+     * 规则编辑：新增（id = null；前缀栏支持多个前缀：逗号/空格/换行分隔，同型号一次挂多条）
+     * 或修改一条库中规则。四个开关与出库扫码规则设置对齐（可重复扫 / 计入统计 / 查历史串号 / 忽略）。
+     */
+    fun saveLibRule(
+        id: Long?,
+        prefixInput: String,
+        name: String,
+        allowDuplicate: Boolean,
+        countEnabled: Boolean,
+        checkHistory: Boolean,
+        ignoreRepeat: Boolean
+    ) {
+        val cleanName = name.trim()
+        val ignore = allowDuplicate && ignoreRepeat   // 忽略仅「可重复扫」时生效
+        val parts = prefixInput.split(',', '，', '、', ';', '；', ' ', '\n', '\t').filter { it.isNotBlank() }
+        val cleaned = parts.mapNotNull { RuleSourceImporter.cleanPrefix(it) }
+        if (cleaned.isEmpty()) {
             _ruleLibMessage.value = "前缀无效：仅支持字母+数字（0-9 / A-Z）"
             return
         }
-        val cleanName = name.trim()
+        if (id != null && cleaned.size > 1) {
+            _ruleLibMessage.value = "编辑时仅支持单条前缀（如需多条：删掉本条后重新新增）"
+            return
+        }
         viewModelScope.launch {
             if (id == null) {
-                // 新增同样查重（与编辑一致）：避免 upsert 的 REPLACE 静默覆盖库中同名前缀
-                if (ruleLibDao.getAll().any { it.prefix == prefix }) {
-                    _ruleLibMessage.value = "前缀已存在：$prefix（未新增；可在列表中点该行「编辑」改名称）"
-                    return@launch
+                var added = 0
+                val conflicts = mutableListOf<String>()
+                app.database.withTransaction {
+                    val existing = ruleLibDao.getAll().map { it.prefix }.toMutableSet()
+                    cleaned.forEach { p ->
+                        if (p in existing) {
+                            conflicts.add(p)
+                        } else {
+                            ruleLibDao.upsert(
+                                RuleLibEntry(
+                                    prefix = p, name = cleanName,
+                                    allowDuplicate = allowDuplicate, countEnabled = countEnabled,
+                                    checkHistory = checkHistory, ignoreRepeat = ignore
+                                )
+                            )
+                            existing.add(p)
+                            added++
+                        }
+                    }
                 }
-                ruleLibDao.upsert(RuleLibEntry(prefix = prefix, name = cleanName))
+                if (conflicts.isNotEmpty()) {
+                    _ruleLibMessage.value = buildString {
+                        append("新增 $added 条")
+                        append("\n前缀已存在（未新增）：${conflicts.joinToString("、")}")
+                        append("\n（可在列表中点该行「编辑」改设置）")
+                    }
+                }
             } else {
-                val conflict = ruleLibDao.getAll().any { it.prefix == prefix && it.id != id }
+                val p = cleaned.first()
+                val conflict = ruleLibDao.getAll().any { it.prefix == p && it.id != id }
                 if (conflict) {
-                    _ruleLibMessage.value = "前缀已存在：$prefix"
+                    _ruleLibMessage.value = "前缀已存在：$p"
                     return@launch
                 }
-                ruleLibDao.update(id, prefix, cleanName, Date())
+                ruleLibDao.updateEntry(
+                    RuleLibEntry(
+                        id = id, prefix = p, name = cleanName,
+                        allowDuplicate = allowDuplicate, countEnabled = countEnabled,
+                        checkHistory = checkHistory, ignoreRepeat = ignore,
+                        updatedAt = Date()
+                    )
+                )
             }
         }
     }

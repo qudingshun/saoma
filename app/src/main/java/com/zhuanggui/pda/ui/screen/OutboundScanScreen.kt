@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.CheckCircle
@@ -38,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -52,7 +55,7 @@ import com.zhuanggui.pda.ui.OutboundScanState
 
 /**
  * 出库扫码界面（竖屏）：
- *  - 顶部：返回设置（可追加规则）+ 报警设置（蜂鸣/振动开关，v1.5.8）；扫码触发以物理扳机为准（机内软触发按钮经真机验证无效，已移除——审计 15）
+ *  - 顶部：返回设置（可追加规则）+ 震动和声音设置（正常/非正常分组：声音开关 + 震动强度 + 语音朗读，v1.7.0）；扫码触发以物理扳机为准（机内软触发按钮经真机验证无效，已移除——审计 15）
  *  - 撤回/前进：本柜当前会话的记录操作可回退、重做（撤销扫码 / 恢复删除）
  *  - 报警弹窗（重复/串号/超量）：点确认停止报警；重复/串号/超量还可一步删除该记录
  *  - 报警三重编码（v1.5.8）：结果一律「颜色 + 图标 + 文字」同现（报警弹窗 / 计数卡 / 记录行 / 最新输出 / 完成弹窗）
@@ -67,10 +70,16 @@ fun OutboundScanScreen(
     records: List<ScanRecord>,
     canUndo: Boolean,
     canRedo: Boolean,
-    alarmBeep: Boolean,
-    alarmVibrate: Boolean,
-    onAlarmBeep: (Boolean) -> Unit,
-    onAlarmVibrate: (Boolean) -> Unit,
+    alarmSoundOk: Boolean,
+    alarmSoundError: Boolean,
+    alarmVibOk: Int,
+    alarmVibError: Int,
+    alarmSpeak: Boolean,
+    onAlarmSoundOk: (Boolean) -> Unit,
+    onAlarmSoundError: (Boolean) -> Unit,
+    onAlarmVibOk: (Int) -> Unit,
+    onAlarmVibError: (Int) -> Unit,
+    onAlarmSpeak: (Boolean) -> Unit,
     onBackToSetup: () -> Unit,
     onManual: (String) -> Unit,
     onStopAlarm: () -> Unit,
@@ -86,7 +95,7 @@ fun OutboundScanScreen(
     var ackedCompleted by rememberSaveable { mutableStateOf(0L) }        // 装柜完成弹窗：同一事件只弹一次（重建后仍防重复弹）
     var deleteTarget by remember { mutableStateOf<ScanRecord?>(null) }   // 重复/串号：一步确认
     var tripleTarget by remember { mutableStateOf<ScanRecord?>(null) }   // 正常记录：三步确认
-    var showAlarmSettings by remember { mutableStateOf(false) }          // 报警设置弹窗（蜂鸣/振动开关，v1.5.8）
+    var showAlarmSettings by remember { mutableStateOf(false) }          // 震动和声音设置弹窗（v1.7.0：分组声音/震动强度/语音）
 
     val errorResult = state.lastResult?.takeIf { it != ScanResult.OK && it != ScanResult.AUX }
     if (errorResult != null && ackedSeq != state.scanSeq) {
@@ -193,28 +202,62 @@ fun OutboundScanScreen(
         )
     }
 
-    // 报警设置（v1.5.8）：蜂鸣/振动开关，勾选即时生效并持久化（下次启动保持）
+    // 震动和声音设置（v1.7.0，原「报警设置」）：分正常/非正常两组，各自声音开关 + 震动强度（关/弱/中/强）
+    // + 语音朗读开关；修改即时生效并持久化（下次启动保持）
     if (showAlarmSettings) {
         AlertDialog(
             onDismissRequest = { showAlarmSettings = false },
-            title = { Text("报警设置", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            title = { Text("震动和声音设置", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Column {
+                    Text("正常扫码（含辅助码）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = alarmBeep, onCheckedChange = onAlarmBeep)
-                        Text("蜂鸣提醒", fontSize = 14.sp)
+                        Checkbox(checked = alarmSoundOk, onCheckedChange = onAlarmSoundOk)
+                        Text("声音（短响一声）", fontSize = 14.sp)
+                    }
+                    Row(
+                        Modifier.padding(start = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("震动强度", fontSize = 13.sp, color = Color.Gray)
+                        LevelPicker(level = alarmVibOk, onLevel = onAlarmVibOk)
                     }
                     Text(
-                        "报警（重复/串号/超量）时循环蜂鸣；正常扫码短响一声。关闭后完全静音。",
+                        "正常扫码可短振一次（默认关）。",
                         fontSize = 11.sp, color = Color.Gray,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 6.dp)
+                    )
+                    HorizontalDivider(thickness = 0.5.dp)
+                    Text(
+                        "非正常：串号 / 重复 / 超量",
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 6.dp)
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = alarmVibrate, onCheckedChange = onAlarmVibrate)
-                        Text("振动提醒", fontSize = 14.sp)
+                        Checkbox(checked = alarmSoundError, onCheckedChange = onAlarmSoundError)
+                        Text("声音（循环报警）", fontSize = 14.sp)
+                    }
+                    Row(
+                        Modifier.padding(start = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("震动强度", fontSize = 13.sp, color = Color.Gray)
+                        LevelPicker(level = alarmVibError, onLevel = onAlarmVibError)
                     }
                     Text(
-                        "报警时循环振动；触屏 / 弹窗确认 / 下一枪停振，10 秒兜底自动停。",
+                        "报警时循环振动，触屏 / 弹窗确认 / 下一枪停振，10 秒兜底自动停。",
+                        fontSize = 11.sp, color = Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 6.dp)
+                    )
+                    HorizontalDivider(thickness = 0.5.dp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = alarmSpeak, onCheckedChange = onAlarmSpeak)
+                        Text("语音朗读", fontSize = 14.sp)
+                    }
+                    Text(
+                        "正常扫码读出「已扫码，N」；辅助码 / 忽略读出「辅助码」（默认开）。",
                         fontSize = 11.sp, color = Color.Gray,
                         modifier = Modifier.padding(start = 4.dp)
                     )
@@ -295,7 +338,7 @@ fun OutboundScanScreen(
             ) {
                 Text("出库扫码", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = { showAlarmSettings = true }) { Text("报警设置", fontSize = 12.sp) }
+                    OutlinedButton(onClick = { showAlarmSettings = true }) { Text("震动和声音设置", fontSize = 11.sp) }
                     OutlinedButton(onClick = onBackToSetup) { Text("返回设置", fontSize = 12.sp) }
                 }
             }
@@ -335,6 +378,14 @@ fun OutboundScanScreen(
                                     if (r.allowDuplicate) add("可重复")
                                     if (!r.countEnabled) add("不计")
                                     if (r.checkHistory) add("查历史")
+                                    if (r.allowDuplicate && r.ignoreRepeat) add("忽略")
+                                    val rng = when {
+                                        r.serialMin.isNotBlank() && r.serialMax.isNotBlank() -> "${r.serialMin}-${r.serialMax}"
+                                        r.serialMin.isNotBlank() -> "≥${r.serialMin}"
+                                        r.serialMax.isNotBlank() -> "≤${r.serialMax}"
+                                        else -> null
+                                    }
+                                    if (rng != null) add("流水$rng")
                                 }
                                 r.prefix + if (tags.isEmpty()) "" else "（${tags.joinToString("/")}）"
                             }.ifBlank { "—" }
@@ -562,4 +613,30 @@ private fun ResultIcon(result: ScanResult, sizeDp: Int) {
         tint = resultColor(result),
         modifier = Modifier.size(sizeDp.dp)
     )
+}
+
+/** 震动强度四选一（关 / 弱 / 中 / 强）：「震动和声音设置」正常 / 非正常两组共用（v1.7.0） */
+@Composable
+private fun LevelPicker(level: Int, onLevel: (Int) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        listOf("关", "弱", "中", "强").forEachIndexed { i, label ->
+            val selected = level == i
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) Color(0xFF1976D2) else Color(0xFFEEEEEE))
+                    .clickable { onLevel(i) }
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    label,
+                    fontSize = 12.sp,
+                    color = if (selected) Color.White else Color.DarkGray
+                )
+            }
+        }
+    }
 }

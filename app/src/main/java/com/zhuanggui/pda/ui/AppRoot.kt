@@ -72,9 +72,13 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onRuleAllowDup = vm::onRuleAllowDupChange,
                 onRuleCount = vm::onRuleCountChange,
                 onRuleCheckHistory = vm::onRuleCheckHistoryChange,
+                onRuleSerialMin = vm::onRuleSerialMinChange,
+                onRuleSerialMax = vm::onRuleSerialMaxChange,
+                onRuleIgnore = vm::onRuleIgnoreChange,
                 onAddRule = vm::addRule,
                 onRemoveRule = vm::removeRule,
                 onRuleFlags = vm::updateRuleFlags,
+                onRuleSerial = vm::updateRuleSerial,
                 onAddRules = vm::addRulesFromSetup,
                 onOpenRuleLibrary = { navController.navigate(Routes.RULE_LIBRARY) },
                 onStart = {
@@ -97,8 +101,11 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             val outbound by vm.outbound.collectAsStateWithLifecycle()
             val outboundRecords by vm.outboundRecords.collectAsStateWithLifecycle()
             val undoRedo by vm.undoRedo.collectAsStateWithLifecycle()
-            val alarmBeep by vm.alarmBeep.collectAsStateWithLifecycle()
-            val alarmVibrate by vm.alarmVibrate.collectAsStateWithLifecycle()
+            val alarmSoundOk by vm.alarmSoundOk.collectAsStateWithLifecycle()
+            val alarmSoundError by vm.alarmSoundError.collectAsStateWithLifecycle()
+            val alarmVibOk by vm.alarmVibOk.collectAsStateWithLifecycle()
+            val alarmVibError by vm.alarmVibError.collectAsStateWithLifecycle()
+            val alarmSpeak by vm.alarmSpeak.collectAsStateWithLifecycle()
             // 进程被杀恢复：导航栈还原在扫码页，但 ViewModel 已重置（activeContainer 为空）
             // 正常流程进入本页时 activeContainer 必非空（startOutboundScan 成功后才导航），不会误触发
             if (outbound.activeContainer == null) {
@@ -123,10 +130,16 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     onRedo = vm::redoLastRecordOp,
                     canUndo = undoRedo.undoCount > 0,
                     canRedo = undoRedo.redoCount > 0,
-                    alarmBeep = alarmBeep,
-                    alarmVibrate = alarmVibrate,
-                    onAlarmBeep = vm::setAlarmBeep,
-                    onAlarmVibrate = vm::setAlarmVibrate
+                    alarmSoundOk = alarmSoundOk,
+                    alarmSoundError = alarmSoundError,
+                    alarmVibOk = alarmVibOk,
+                    alarmVibError = alarmVibError,
+                    alarmSpeak = alarmSpeak,
+                    onAlarmSoundOk = vm::setAlarmSoundOk,
+                    onAlarmSoundError = vm::setAlarmSoundError,
+                    onAlarmVibOk = vm::setAlarmVibOk,
+                    onAlarmVibError = vm::setAlarmVibError,
+                    onAlarmSpeak = vm::setAlarmSpeak
                 )
             }
         }
@@ -171,7 +184,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 importing = ruleImporting,
                 message = ruleLibMessage,
                 onMessageShown = vm::clearRuleLibMessage,
-                onSave = { id, prefix, name -> vm.saveLibRule(id, prefix, name) },
+                onSave = { id, prefix, name, allowDup, count, checkHist, ignore ->
+                    vm.saveLibRule(id, prefix, name, allowDup, count, checkHist, ignore)
+                },
                 onDelete = vm::deleteLibRule,
                 onImport = { uri -> vm.importRuleSource(context, uri) },
                 onBack = { navController.popBackStack() }

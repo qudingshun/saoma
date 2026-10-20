@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,7 +46,9 @@ private val RULE_FILE_MIMES = arrayOf(
 
 /**
  * 规则库管理页：规则编辑（新增 / 修改 / 删除）+ 规则源导入（.xlsx / .xls / .csv / .txt）。
- * 「规则选择」在装柜设置页的「从规则库选择」完成。
+ * v1.7.0（第 6 条）：同一型号可挂多条前缀（列表按型号分组）；每条规则带四个开关
+ * （可重复扫 / 计入统计 / 查历史串号 / 忽略），新增时支持一次录入多个前缀。
+ * 「规则选择」在装柜设置页的「从规则库选择」完成（连同四个开关一起复制到本柜）。
  */
 @Composable
 fun RulesScreen(
@@ -53,7 +56,10 @@ fun RulesScreen(
     importing: Boolean,
     message: String?,
     onMessageShown: () -> Unit,
-    onSave: (id: Long?, prefix: String, name: String) -> Unit,
+    onSave: (
+        id: Long?, prefix: String, name: String,
+        allowDuplicate: Boolean, countEnabled: Boolean, checkHistory: Boolean, ignoreRepeat: Boolean
+    ) -> Unit,
     onDelete: (Long) -> Unit,
     onImport: (Uri) -> Unit,
     onBack: () -> Unit
@@ -84,8 +90,8 @@ fun RulesScreen(
         RuleEditDialog(
             initial = target.entry,
             onDismiss = { editTarget = null },
-            onSave = { prefix, name ->
-                onSave(target.entry?.id, prefix, name)
+            onSave = { prefix, name, allowDup, count, checkHist, ignore ->
+                onSave(target.entry?.id, prefix, name, allowDup, count, checkHist, ignore)
                 editTarget = null
             }
         )
@@ -162,32 +168,47 @@ fun RulesScreen(
             }
 
             Text(
-                "共 ${rules.size} 条" + (if (filter.isNotBlank()) " · 匹配 ${filtered.size} 条" else ""),
+                "共 ${rules.size} 条（按型号分组）" + (if (filter.isNotBlank()) " · 匹配 ${filtered.size} 条" else ""),
                 fontSize = 12.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
             )
             HorizontalDivider()
 
+            val grouped = filtered
+                .groupBy { it.name.ifBlank { "（未填型号）" } }
+                .toSortedMap()
+
             LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                items(filtered, key = { it.id }) { entry ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(entry.prefix, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                            if (entry.name.isNotBlank()) {
-                                Text(entry.name, fontSize = 13.sp, color = Color.Gray)
-                            }
-                        }
-                        TextButton(onClick = { editTarget = EditTarget(entry) }) {
-                            Text("编辑", fontSize = 13.sp)
-                        }
-                        TextButton(onClick = { deleteTarget = entry }) {
-                            Text("删除", fontSize = 13.sp, color = Color(0xFFD32F2F))
+                grouped.forEach { (model, entries) ->
+                    item(key = "h_$model") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(model, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1976D2))
+                            Text("  ${entries.size} 条", fontSize = 12.sp, color = Color.Gray)
                         }
                     }
-                    HorizontalDivider(thickness = 0.5.dp)
+                    items(entries, key = { it.id }) { entry ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(entry.prefix, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                                flagSummary(entry)?.let {
+                                    Text(it, fontSize = 12.sp, color = Color(0xFF616161))
+                                }
+                            }
+                            TextButton(onClick = { editTarget = EditTarget(entry) }) {
+                                Text("编辑", fontSize = 13.sp)
+                            }
+                            TextButton(onClick = { deleteTarget = entry }) {
+                                Text("删除", fontSize = 13.sp, color = Color(0xFFD32F2F))
+                            }
+                        }
+                        HorizontalDivider(thickness = 0.5.dp)
+                    }
                 }
                 if (filtered.isEmpty()) {
                     item {
@@ -210,40 +231,89 @@ fun RulesScreen(
 /** 编辑目标：entry = null 表示新增长 */
 private data class EditTarget(val entry: RuleLibEntry?)
 
+/** 规则开关摘要（列表行第二行；全默认（无特殊设置）时返回 null 不显示）；设置页「从规则库选择」也复用 */
+internal fun flagSummary(e: RuleLibEntry): String? {
+    val parts = mutableListOf<String>()
+    if (e.allowDuplicate) parts.add("可重复扫")
+    if (!e.countEnabled) parts.add("辅助码（不计统计）")
+    if (e.checkHistory) parts.add("查历史串号")
+    if (e.allowDuplicate && e.ignoreRepeat) parts.add("忽略（不记录）")
+    return if (parts.isEmpty()) null else parts.joinToString(" · ")
+}
+
 @Composable
 private fun RuleEditDialog(
     initial: RuleLibEntry?,
     onDismiss: () -> Unit,
-    onSave: (prefix: String, name: String) -> Unit
+    onSave: (
+        prefix: String, name: String,
+        allowDuplicate: Boolean, countEnabled: Boolean, checkHistory: Boolean, ignoreRepeat: Boolean
+    ) -> Unit
 ) {
     var prefix by remember { mutableStateOf(initial?.prefix ?: "") }
     var name by remember { mutableStateOf(initial?.name ?: "") }
+    var allowDup by remember { mutableStateOf(initial?.allowDuplicate ?: false) }
+    var count by remember { mutableStateOf(initial?.countEnabled ?: true) }
+    var checkHist by remember { mutableStateOf(initial?.checkHistory ?: false) }
+    var ignore by remember { mutableStateOf(initial?.ignoreRepeat ?: false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "新增规则" else "编辑规则") },
+        title = { Text(if (initial == null) "新增规则（可多条）" else "编辑规则") },
         text = {
             Column {
                 OutlinedTextField(
                     value = prefix,
-                    onValueChange = { prefix = it.filter { c -> c.isLetterOrDigit() }.uppercase() },
-                    label = { Text("前缀（字母+数字）") },
-                    singleLine = true,
+                    onValueChange = { v ->
+                        prefix = if (initial == null) {
+                            // 新增：支持一次录入多个前缀（逗号/空格/换行分隔）
+                            v.uppercase().filter { c -> c.isLetterOrDigit() || c in ",，、;； \n\t" }
+                        } else {
+                            v.filter { c -> c.isLetterOrDigit() }.uppercase()
+                        }
+                    },
+                    label = { Text(if (initial == null) "前缀（可多个：逗号/空格分隔）" else "前缀（字母+数字）") },
+                    singleLine = initial != null,
+                    maxLines = if (initial == null) 3 else 1,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("名称（可选）") },
+                    label = { Text("型号（可选；同型号可挂多条前缀）") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = allowDup, onCheckedChange = { allowDup = it })
+                    Text("可重复扫", fontSize = 14.sp)
+                    Spacer(Modifier.weight(1f))
+                    Checkbox(checked = count, onCheckedChange = { count = it })
+                    Text("计入统计", fontSize = 14.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = checkHist, onCheckedChange = { checkHist = it })
+                    Text("查历史串号", fontSize = 14.sp)
+                    Spacer(Modifier.weight(1f))
+                    Checkbox(
+                        checked = allowDup && ignore,
+                        onCheckedChange = { ignore = it },
+                        enabled = allowDup
+                    )
+                    Text("忽略", fontSize = 14.sp, color = if (allowDup) Color.Unspecified else Color.Gray)
+                }
+                Text(
+                    "可重复扫：同码反复扫不报“重复”。计入统计：不勾 = 辅助码（只留痕不计数）。" +
+                        "查历史串号：条码在其他柜出现过 → 报串号。忽略（仅可重复扫）：扫到不记录、不落盘，语音报“辅助码”。",
+                    fontSize = 11.sp, color = Color.Gray
                 )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(prefix, name) },
+                onClick = { onSave(prefix, name, allowDup, count, checkHist, allowDup && ignore) },
                 enabled = prefix.isNotBlank()
             ) { Text("保存") }
         },

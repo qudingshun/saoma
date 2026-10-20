@@ -32,3 +32,32 @@ fun decideScanResult(
     total in 1..okCount -> ScanResult.OVER_LIMIT
     else -> ScanResult.OK
 }
+
+/**
+ * 流水号范围判定纯函数（v1.7.0：规则可选「流水号最小值/最大值」限定数据范围）。
+ *
+ * 语义（业务契约）：
+ *  - 上下界都留空 → 不校验流水号（与旧版行为一致），直接通过
+ *  - 设了任一侧 → 前缀之后的部分（[rest]）必须是纯数字，且数值落在范围内；否则不匹配（串号）
+ *  - 数值比较用 BigInteger：兼容任意长度流水号，避免 Long 溢出
+ *
+ * @param rest 条码去掉规则前缀后的剩余部分（调用方 removePrefix 得到；前缀=整条码时为空）
+ * @param serialMin 流水号最小值（空 = 不限）
+ * @param serialMax 流水号最大值（空 = 不限）
+ */
+fun serialInRange(rest: String, serialMin: String, serialMax: String): Boolean {
+    val min = serialMin.trim()
+    val max = serialMax.trim()
+    if (min.isEmpty() && max.isEmpty()) return true
+    if (rest.isEmpty() || !rest.all { it.isDigit() }) return false
+    val value = runCatching { java.math.BigInteger(rest) }.getOrNull() ?: return false
+    if (min.isNotEmpty()) {
+        val lo = runCatching { java.math.BigInteger(min) }.getOrNull() ?: return false
+        if (value < lo) return false
+    }
+    if (max.isNotEmpty()) {
+        val hi = runCatching { java.math.BigInteger(max) }.getOrNull() ?: return false
+        if (value > hi) return false
+    }
+    return true
+}

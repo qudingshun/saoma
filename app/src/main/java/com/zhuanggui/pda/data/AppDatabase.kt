@@ -21,7 +21,7 @@ import com.zhuanggui.pda.data.entity.ScanRecord
     entities = [
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -178,10 +178,31 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v10 → v11：规则增强。
+         *  - load_rules 加「流水号范围」（v1.7.0 第 1 条：前缀之后的数字须落在 [serialMin, serialMax] 内）
+         *    与「忽略」（可重复扫的条码扫到不记录）
+         *  - rule_library 加四个规则开关（v1.7.0 第 6 条：库内规则与出库扫码规则设置对齐）
+         *    allowDuplicate / countEnabled / checkHistory / ignoreRepeat
+         *    历史行默认值 = 旧行为（不可重复、计入统计、不查历史、不忽略）
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE load_rules ADD COLUMN serialMin TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE load_rules ADD COLUMN serialMax TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE load_rules ADD COLUMN ignoreRepeat INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE rule_library ADD COLUMN allowDuplicate INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE rule_library ADD COLUMN countEnabled INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE rule_library ADD COLUMN checkHistory INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE rule_library ADD COLUMN ignoreRepeat INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
+            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+            MIGRATION_10_11
         )
     }
 }
