@@ -11,17 +11,19 @@ import com.zhuanggui.pda.data.converter.Converters
 import com.zhuanggui.pda.data.dao.LoadContainerDao
 import com.zhuanggui.pda.data.dao.LoadRuleDao
 import com.zhuanggui.pda.data.dao.RuleLibDao
+import com.zhuanggui.pda.data.dao.RuleModelDao
 import com.zhuanggui.pda.data.dao.ScanRecordDao
 import com.zhuanggui.pda.data.entity.LoadContainer
 import com.zhuanggui.pda.data.entity.LoadRule
 import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.data.entity.ScanRecord
 
 @Database(
     entities = [
-        LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class
+        LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class, RuleModel::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -30,6 +32,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun loadRuleDao(): LoadRuleDao
     abstract fun scanRecordDao(): ScanRecordDao
     abstract fun ruleLibDao(): RuleLibDao
+    abstract fun ruleModelDao(): RuleModelDao
 
     companion object {
         @Volatile
@@ -205,11 +208,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v12 → v13：新增 rule_models（型号），并把现有规则里的型号名称回填成型号行 */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `rule_models` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_rule_models_name` ON `rule_models` (`name`)"
+                )
+                // 现有规则中的型号名称去重回填；空名称不建型号（列表归到「未填型号」）
+                db.execSQL(
+                    "INSERT OR IGNORE INTO `rule_models` (`name`, `updatedAt`) " +
+                        "SELECT DISTINCT `name`, CAST(strftime('%s','now') AS INTEGER) * 1000 " +
+                        "FROM `rule_library` WHERE `name` != ''"
+                )
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13
         )
     }
 }

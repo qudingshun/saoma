@@ -13,6 +13,7 @@ import com.zhuanggui.pda.data.dao.ScanRecordGroup
 import com.zhuanggui.pda.data.entity.LoadContainer
 import com.zhuanggui.pda.data.entity.LoadRule
 import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.export.FileExporter
@@ -143,6 +144,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val ruleDao = app.database.loadRuleDao()
     private val recordDao = app.database.scanRecordDao()
     private val ruleLibDao = app.database.ruleLibDao()
+    private val ruleModelDao = app.database.ruleModelDao()
 
     /** 串行化「设置→装柜」与「每枪扫码」：保证计数与查重基于最新状态 */
     private val outboundMutex = Mutex()
@@ -198,6 +200,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- 规则库（规则源导入 / 规则编辑 / 规则选择） ----------
 
     val ruleLibrary: StateFlow<List<RuleLibEntry>> = ruleLibDao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 规则库型号（v13）：先建型号、再逐个添加规则；空型号也会显示 */
+    val ruleModels: StateFlow<List<RuleModel>> = ruleModelDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _ruleLibMessage = MutableStateFlow<String?>(null)
@@ -979,6 +985,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 var added = 0
                 val conflicts = mutableListOf<String>()
                 app.database.withTransaction {
+                    if (cleanName.isNotBlank()) {
+                        // 规则挂在型号下：型号行不存在则补建（导入/手动新增都走这里）
+                        ruleModelDao.insert(RuleModel(name = cleanName))
+                    }
                     val existing = ruleLibDao.getAll().map { it.prefix }.toMutableSet()
                     cleaned.forEach { p ->
                         if (p in existing) {
@@ -1026,6 +1036,57 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { ruleLibDao.delete(id) }
     }
 
+    // ---------- 规则库型号（v1.7.5：先建型号，再逐条添加规则） ----------
+
+    /** 新增型号（名称唯一；允许暂无规则） */
+    fun addRuleModel(name: String) {
+        val n = name.trim()
+        if (n.isEmpty()) {
+            _ruleLibMessage.value = "请输入型号名称"
+            return
+        }
+        viewModelScope.launch {
+            val exists = ruleModelDao.findByName(n) != null || ruleLibDao.getAll().any { it.name == n }
+            if (exists) {
+                _ruleLibMessage.value = "型号已存在：$n"
+                return@launch
+            }
+            ruleModelDao.insert(RuleModel(name = n))
+        }
+    }
+
+    /** 型号改名：同步更新该型号下全部规则的名称 */
+    fun renameRuleModel(id: Long, oldName: String, newName: String) {
+        val n = newName.trim()
+        if (n.isEmpty()) {
+            _ruleLibMessage.value = "型号名称不能为空"
+            return
+        }
+        if (n == oldName) return
+        viewModelScope.launch {
+            val exists = ruleModelDao.findByName(n) != null || ruleLibDao.getAll().any { it.name == n }
+            if (exists) {
+                _ruleLibMessage.value = "型号已存在：$n"
+                return@launch
+            }
+            app.database.withTransaction {
+                val now = Date()
+                ruleModelDao.rename(id, n, now)
+                if (oldName.isNotBlank()) ruleLibDao.renameModelRules(oldName, n, now)
+            }
+        }
+    }
+
+    /** 删除型号：连同其下全部规则一起删除 */
+    fun deleteRuleModel(id: Long, name: String) {
+        viewModelScope.launch {
+            app.database.withTransaction {
+                if (name.isNotBlank()) ruleLibDao.deleteByModelName(name)
+                ruleModelDao.delete(id)
+            }
+        }
+    }
+
     /**
      * 规则源导入：解析 .xlsx/.xls/.csv/.txt（第一列=前缀，第二列可选=名称，第 3~6 列可选=四个开关），
      * 全部写入规则库；前缀冲突则覆盖。源文件不带开关列时保留库内原开关（只更新名称）。
@@ -1040,14 +1101,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称，" +
                         "第 3~6 列可选=可重复扫/计入统计/查历史串号/忽略（1/0）"
                 } else {
+                    val ruleRows = parsed.filter { it.prefix.isNotBlank() }
+                    val modelNames = parsed.map { it.name.trim() }.filter { it.isNotBlank() }.distinct()
                     var added = 0
                     var updated = 0
                     app.database.withTransaction {
+                        modelNames.forEach { ruleModelDao.insert(RuleModel(name = it)) }
                         val existing = ruleLibDao.getAll().associateBy { it.prefix }
-                        parsed.forEach { p ->
+                        ruleRows.forEach { p ->
                             val old = existing[p.prefix]
                             if (old != null) updated++ else added++
-                            // 导出的 TSV 带开关 → 以文件为准；普通两列文件 → 保留库内原开关
+                            // 导出的 XLSX 带开关 → 以文件为准；普通两列文件 → 保留库内原开关
                             val keep = p.hasFlags || old == null
                             ruleLibDao.upsert(
                                 RuleLibEntry(
@@ -1062,7 +1126,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                     }
-                    "导入完成：新增 $added 条，覆盖 $updated 条，共 ${parsed.size} 条"
+                    buildString {
+                        append("导入完成：新增 $added 条，覆盖 $updated 条，共 ${ruleRows.size} 条")
+                        if (modelNames.isNotEmpty()) append("；型号 ${modelNames.size} 个")
+                    }
                 }
             }.getOrElse { "导入失败：${it.message ?: "文件无法解析"}" }
             _ruleImporting.value = false
@@ -1071,20 +1138,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 规则库导出（v1.7.4）：写成与「导入规则源」兼容的 TSV（含四个开关），
-     * 拷到其他 PDA 后用「导入规则源」选该文件即可完整还原。
+     * 规则库导出（v1.7.5）：XLSX（型号名称 / 前缀 / 四个开关），
+     * 拷到其他 PDA 后用「导入」选该文件即可完整还原。
      */
     fun exportRuleLibrary() {
         viewModelScope.launch {
             _ruleExporting.value = true
             val msg = runCatching {
-                val list = ruleLibDao.getAll()
-                if (list.isEmpty()) {
+                val models = ruleModelDao.getAll()
+                val rules = ruleLibDao.getAll()
+                if (models.isEmpty() && rules.isEmpty()) {
                     "规则库为空，没有可导出的规则"
                 } else {
-                    val file = withContext(Dispatchers.IO) { RuleExporter.export(list) }
-                    "已导出 ${list.size} 条规则：\n${RuleExporter.displayDir()}/${file.name}\n\n" +
-                        "拷贝到其他 PDA 后，在「规则库」点「导入」选择该文件即可（含四个开关）。"
+                    val file = withContext(Dispatchers.IO) { RuleExporter.export(models, rules) }
+                    "已导出 ${models.size} 个型号 / ${rules.size} 条规则：\n" +
+                        "${RuleExporter.displayDir()}/${file.name}\n\n" +
+                        "拷贝到其他 PDA 后，在「规则库」点「导入」选择该文件即可（含型号与四个开关）。"
                 }
             }.getOrElse { "导出失败：${it.message ?: "无法写入存储，请检查存储权限"}" }
             _ruleExporting.value = false

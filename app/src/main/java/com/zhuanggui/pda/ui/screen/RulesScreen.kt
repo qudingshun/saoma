@@ -3,6 +3,7 @@ package com.zhuanggui.pda.ui.screen
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -27,51 +29,59 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.data.entity.RuleModel
 
-/** 规则源文件类型（解析端按扩展名判断，这里限定选择范围；含导出的 .tsv） */
+/** 规则源文件类型（解析端按扩展名判断，这里限定选择范围；含导出的 .xlsx） */
 private val RULE_FILE_MIMES = arrayOf(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
     "application/vnd.ms-excel",                                           // .xls
     "text/csv",                                                           // .csv
     "text/plain",                                                         // .txt
-    "text/tab-separated-values",                                          // .tsv（规则库导出）
-    "application/octet-stream"                                            // 部分文件管理器对 .tsv 的兜底类型
+    "text/tab-separated-values"                                           // .tsv（旧版导出，兼容）
 )
 
 /**
- * 规则库管理页：规则编辑（新增 / 修改 / 删除）+ 规则源导入（.xlsx / .xls / .csv / .txt / .tsv）+ 导出（v1.7.4）。
- * v1.7.0（第 6 条）：同一型号可挂多条前缀（列表按型号分组）；每条规则带四个开关
- * （可重复扫 / 计入统计 / 查历史串号 / 忽略），新增时支持一次录入多个前缀。
- * 「规则选择」在装柜设置页的「从规则库选择」完成（连同四个开关一起复制到本柜）。
+ * 规则库管理页（v1.7.5：型号为组，规则折叠）：
+ *  - 维护顺序：先「新增型号」，再在型号行里「添加规则」逐个加前缀
+ *  - 列表默认只显示型号名称（含规则条数），点型号行展开/收起其规则
+ *  - 型号可改名（同步规则名称）/ 删除（连同其下规则）；规则可逐条编辑/删除
+ *  - 导入 / 导出 XLSX（型号名称 / 前缀 / 四个开关），便于拷到其他 PDA
  */
 @Composable
 fun RulesScreen(
+    models: List<RuleModel>,
     rules: List<RuleLibEntry>,
     importing: Boolean,
     exporting: Boolean,
     message: String?,
     onMessageShown: () -> Unit,
-    onSave: (
+    onAddModel: (String) -> Unit,
+    onRenameModel: (Long, String, String) -> Unit,
+    onDeleteModel: (Long, String) -> Unit,
+    onSaveRule: (
         id: Long?, prefix: String, name: String,
         allowDuplicate: Boolean, countEnabled: Boolean, checkHistory: Boolean, ignoreRepeat: Boolean
     ) -> Unit,
-    onDelete: (Long) -> Unit,
+    onDeleteRule: (Long) -> Unit,
     onImport: (Uri) -> Unit,
     onExport: () -> Unit,
     onBack: () -> Unit
 ) {
-    var editTarget by remember { mutableStateOf<EditTarget?>(null) }
-    var deleteTarget by remember { mutableStateOf<RuleLibEntry?>(null) }
-    var filter by rememberSaveable { mutableStateOf("") }
+    var modelDialog by remember { mutableStateOf<ModelTarget?>(null) }
+    var ruleDialog by remember { mutableStateOf<RuleTarget?>(null) }
+    var deleteModel by remember { mutableStateOf<RuleModel?>(null) }
+    var deleteRule by remember { mutableStateOf<RuleLibEntry?>(null) }
+    var filter by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(setOf<String>()) }
     var localMessage by remember { mutableStateOf<String?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -91,39 +101,76 @@ fun RulesScreen(
         )
     }
 
-    editTarget?.let { target ->
-        RuleEditDialog(
-            initial = target.entry,
-            onDismiss = { editTarget = null },
-            onSave = { prefix, name, allowDup, count, checkHist, ignore ->
-                onSave(target.entry?.id, prefix, name, allowDup, count, checkHist, ignore)
-                editTarget = null
+    modelDialog?.let { target ->
+        RuleModelDialog(
+            title = if (target.id == null) "新增型号" else "型号改名",
+            initial = target.name,
+            onDismiss = { modelDialog = null },
+            onSave = { name ->
+                if (target.id == null) onAddModel(name) else onRenameModel(target.id, target.name, name)
+                modelDialog = null
             }
         )
     }
 
-    deleteTarget?.let { entry ->
+    ruleDialog?.let { target ->
+        RuleEditDialog(
+            modelName = target.modelName,
+            initial = target.entry,
+            onDismiss = { ruleDialog = null },
+            onSave = { prefix, allowDup, count, checkHist, ignore ->
+                onSaveRule(target.entry?.id, prefix, target.modelName, allowDup, count, checkHist, ignore)
+                ruleDialog = null
+            }
+        )
+    }
+
+    deleteModel?.let { model ->
+        val count = rules.count { it.name == model.name }
         AlertDialog(
-            onDismissRequest = { deleteTarget = null },
+            onDismissRequest = { deleteModel = null },
+            title = { Text("删除型号？") },
+            text = {
+                Text(
+                    "型号：${model.name.ifBlank { "（未填型号）" }}\n" +
+                        "其下 $count 条规则将一并删除。\n\n已装柜的柜子不受影响（装柜使用规则快照）。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteModel(model.id, model.name)
+                    deleteModel = null
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { deleteModel = null }) { Text("取消") } }
+        )
+    }
+
+    deleteRule?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { deleteRule = null },
             title = { Text("删除规则？") },
             text = {
                 Text(
-                    "将从规则库删除：${entry.prefix}" +
-                        (if (entry.name.isNotBlank()) "（${entry.name}）" else "") +
+                    "将从型号「${entry.name.ifBlank { "未填" }}」删除前缀：${entry.prefix}" +
                         "\n\n已装柜的柜子不受影响（装柜使用规则快照）。"
                 )
             },
             confirmButton = {
-                TextButton(onClick = { onDelete(entry.id); deleteTarget = null }) { Text("删除") }
+                TextButton(onClick = { onDeleteRule(entry.id); deleteRule = null }) { Text("删除") }
             },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { deleteRule = null }) { Text("取消") } }
         )
     }
 
-    val filtered = if (filter.isBlank()) rules
-    else rules.filter {
-        it.prefix.contains(filter, ignoreCase = true) || it.name.contains(filter, ignoreCase = true)
-    }
+    // 型号集合 = 型号表 + 规则里出现但型号表缺失的名称（容错）；空名称归到「（未填型号）」
+    val modelNames = (models.map { it.name } + rules.map { it.name }).distinct()
+        .filter { name ->
+            filter.isBlank() ||
+                name.contains(filter, ignoreCase = true) ||
+                rules.any { it.name == name && it.prefix.contains(filter, ignoreCase = true) }
+        }
+        .sorted()
 
     Scaffold { pad ->
         Column(
@@ -152,7 +199,7 @@ fun RulesScreen(
                     }
                     OutlinedButton(
                         onClick = onExport,
-                        enabled = !exporting && rules.isNotEmpty(),
+                        enabled = !exporting && (models.isNotEmpty() || rules.isNotEmpty()),
                         contentPadding = PaddingValues(horizontal = 8.dp),
                         modifier = Modifier.height(34.dp)
                     ) {
@@ -167,9 +214,9 @@ fun RulesScreen(
             }
 
             Text(
-                "导入支持 .xlsx / .xls / .csv / .txt：第一列 = 前缀，第二列 = 名称（可选），" +
-                    "第 3~6 列 = 四个开关（可选，1/0）；导出为同格式 TSV（含开关）",
-                fontSize = 11.sp, color = Color.Gray
+                "先建型号，再点型号行「添加规则」逐个添加前缀；导入/导出为 XLSX（型号 / 前缀 / 四个开关）",
+                fontSize = 11.sp, color = Color.Gray,
+                modifier = Modifier.padding(top = 2.dp)
             )
 
             Row(
@@ -180,67 +227,112 @@ fun RulesScreen(
                 OutlinedTextField(
                     value = filter,
                     onValueChange = { filter = it },
-                    label = { Text("过滤前缀/名称") },
+                    label = { Text("过滤型号/前缀", fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
-                Button(onClick = { editTarget = EditTarget(null) }) { Text("新增", fontSize = 15.sp) }
+                Button(
+                    onClick = { modelDialog = ModelTarget(null, "") },
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier.height(44.dp)
+                ) { Text("新增型号", fontSize = 14.sp) }
             }
 
             Text(
-                "共 ${rules.size} 条（按型号分组）" + (if (filter.isNotBlank()) " · 匹配 ${filtered.size} 条" else ""),
-                fontSize = 12.sp, color = Color.Gray,
+                "共 ${modelNames.size} 个型号 / ${rules.size} 条规则" +
+                    if (filter.isNotBlank()) "（已过滤）" else "",
+                fontSize = 11.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
             )
             HorizontalDivider()
 
-            val grouped = filtered
-                .groupBy { it.name.ifBlank { "（未填型号）" } }
-                .toSortedMap()
-
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                grouped.forEach { (model, entries) ->
-                    item(key = "h_$model") {
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(model, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1976D2))
-                            Text("  ${entries.size} 条", fontSize = 12.sp, color = Color.Gray)
-                        }
-                    }
-                    items(entries, key = { it.id }) { entry ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(entry.prefix, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                                flagSummary(entry)?.let {
-                                    Text(it, fontSize = 12.sp, color = Color(0xFF616161))
+            if (modelNames.isEmpty()) {
+                Text(
+                    if (models.isEmpty() && rules.isEmpty())
+                        "规则库为空：点「新增型号」先建型号，再逐个添加规则"
+                    else "无匹配",
+                    fontSize = 13.sp, color = Color.Gray,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            } else {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                    items(modelNames, key = { "m_$it" }) { name ->
+                        val model = models.firstOrNull { it.name == name }
+                        val entries = rules.filter { it.name == name }.sortedBy { it.prefix }
+                        val open = name in expanded
+                        Column(Modifier.fillMaxWidth()) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        expanded = if (open) expanded - name else expanded + name
+                                    }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    if (open) "▾" else "▸",
+                                    fontSize = 12.sp, color = Color.Gray,
+                                    modifier = Modifier.width(18.dp)
+                                )
+                                Text(
+                                    name.ifBlank { "（未填型号）" },
+                                    fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                                Text("${entries.size} 条", fontSize = 11.sp, color = Color.Gray)
+                            }
+                            if (open) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(start = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    TextButton(onClick = { ruleDialog = RuleTarget(name, null) }) {
+                                        Text("＋ 添加规则", fontSize = 12.sp)
+                                    }
+                                    if (model != null) {
+                                        TextButton(onClick = {
+                                            modelDialog = ModelTarget(model.id, model.name)
+                                        }) { Text("改名", fontSize = 12.sp) }
+                                    }
+                                    TextButton(onClick = {
+                                        deleteModel = model ?: RuleModel(id = 0, name = name)
+                                    }) {
+                                        Text("删除型号", fontSize = 12.sp, color = Color(0xFFD32F2F))
+                                    }
+                                }
+                                if (entries.isEmpty()) {
+                                    Text(
+                                        "暂无规则：点「＋ 添加规则」逐个添加前缀",
+                                        fontSize = 11.sp, color = Color.Gray,
+                                        modifier = Modifier.padding(start = 30.dp, bottom = 6.dp)
+                                    )
+                                }
+                                entries.forEach { entry ->
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(entry.prefix, fontSize = 14.sp)
+                                            flagSummary(entry)?.let {
+                                                Text(it, fontSize = 10.sp, color = Color(0xFF616161))
+                                            }
+                                        }
+                                        TextButton(onClick = { ruleDialog = RuleTarget(name, entry) }) {
+                                            Text("编辑", fontSize = 12.sp)
+                                        }
+                                        TextButton(onClick = { deleteRule = entry }) {
+                                            Text("删除", fontSize = 12.sp, color = Color(0xFFD32F2F))
+                                        }
+                                    }
+                                    HorizontalDivider(thickness = 0.5.dp)
                                 }
                             }
-                            TextButton(onClick = { editTarget = EditTarget(entry) }) {
-                                Text("编辑", fontSize = 13.sp)
-                            }
-                            TextButton(onClick = { deleteTarget = entry }) {
-                                Text("删除", fontSize = 13.sp, color = Color(0xFFD32F2F))
-                            }
+                            HorizontalDivider(thickness = 0.5.dp)
                         }
-                        HorizontalDivider(thickness = 0.5.dp)
-                    }
-                }
-                if (filtered.isEmpty()) {
-                    item {
-                        Text(
-                            if (rules.isEmpty()) {
-                                "规则库为空：点右上角「导入规则源」导入 Excel/CSV，或点「新增」手动添加"
-                            } else {
-                                "无匹配"
-                            },
-                            fontSize = 14.sp, color = Color.Gray,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
                     }
                 }
             }
@@ -248,8 +340,8 @@ fun RulesScreen(
     }
 }
 
-/** 编辑目标：entry = null 表示新增长 */
-private data class EditTarget(val entry: RuleLibEntry?)
+private data class ModelTarget(val id: Long?, val name: String)
+private data class RuleTarget(val modelName: String, val entry: RuleLibEntry?)
 
 /** 规则开关摘要（列表行第二行；全默认（无特殊设置）时返回 null 不显示）；设置页「从规则库选择」也复用 */
 internal fun flagSummary(e: RuleLibEntry): String? {
@@ -261,17 +353,53 @@ internal fun flagSummary(e: RuleLibEntry): String? {
     return if (parts.isEmpty()) null else parts.joinToString(" · ")
 }
 
+/** 型号新增/改名弹窗（只维护名称，规则随后逐个添加） */
+@Composable
+private fun RuleModelDialog(
+    title: String,
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(40) },
+                    label = { Text("型号名称（如 T45LW）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "先建型号，再在型号行点「添加规则」逐个添加条码前缀。",
+                    fontSize = 11.sp, color = Color.Gray,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name) }, enabled = name.isNotBlank()) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** 规则新增/编辑弹窗（型号固定；一次一条前缀，逐个添加） */
 @Composable
 private fun RuleEditDialog(
+    modelName: String,
     initial: RuleLibEntry?,
     onDismiss: () -> Unit,
     onSave: (
-        prefix: String, name: String,
+        prefix: String,
         allowDuplicate: Boolean, countEnabled: Boolean, checkHistory: Boolean, ignoreRepeat: Boolean
     ) -> Unit
 ) {
     var prefix by remember { mutableStateOf(initial?.prefix ?: "") }
-    var name by remember { mutableStateOf(initial?.name ?: "") }
     var allowDup by remember { mutableStateOf(initial?.allowDuplicate ?: false) }
     var count by remember { mutableStateOf(initial?.countEnabled ?: true) }
     var checkHist by remember { mutableStateOf(initial?.checkHistory ?: false) }
@@ -279,31 +407,16 @@ private fun RuleEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "新增规则（可多条）" else "编辑规则") },
+        title = { Text(if (initial == null) "添加规则" else "编辑规则") },
         text = {
             Column {
+                Text("型号：${modelName.ifBlank { "（未填型号）" }}", fontSize = 13.sp, color = Color(0xFF1976D2))
                 OutlinedTextField(
                     value = prefix,
-                    onValueChange = { v ->
-                        prefix = if (initial == null) {
-                            // 新增：支持一次录入多个前缀（逗号/空格/换行分隔）
-                            v.uppercase().filter { c -> c.isLetterOrDigit() || c in ",，、;； \n\t" }
-                        } else {
-                            v.filter { c -> c.isLetterOrDigit() }.uppercase()
-                        }
-                    },
-                    label = { Text(if (initial == null) "前缀（可多个：逗号/空格分隔）" else "前缀（字母+数字）") },
-                    singleLine = initial != null,
-                    maxLines = if (initial == null) 3 else 1,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("型号（可选；同型号可挂多条前缀）") },
+                    onValueChange = { v -> prefix = v.filter { it.isLetterOrDigit() }.uppercase() },
+                    label = { Text("条码前缀（字母+数字，一次一条）") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -333,7 +446,7 @@ private fun RuleEditDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(prefix, name, allowDup, count, checkHist, allowDup && ignore) },
+                onClick = { onSave(prefix, allowDup, count, checkHist, allowDup && ignore) },
                 enabled = prefix.isNotBlank()
             ) { Text("保存") }
         },

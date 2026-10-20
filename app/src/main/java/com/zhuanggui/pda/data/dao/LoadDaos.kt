@@ -8,6 +8,7 @@ import androidx.room.Update
 import com.zhuanggui.pda.data.entity.LoadContainer
 import com.zhuanggui.pda.data.entity.LoadRule
 import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.data.entity.ScanRecord
 import kotlinx.coroutines.flow.Flow
 import java.util.Date
@@ -177,5 +178,34 @@ interface RuleLibDao {
     suspend fun getAll(): List<RuleLibEntry>
 
     @Query("DELETE FROM rule_library WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    /** 型号改名：同步更新该型号下所有规则的名称（v13） */
+    @Query("UPDATE rule_library SET name = :newName, updatedAt = :updatedAt WHERE name = :oldName")
+    suspend fun renameModelRules(oldName: String, newName: String, updatedAt: java.util.Date)
+
+    /** 删除型号：删除其下全部规则（v13） */
+    @Query("DELETE FROM rule_library WHERE name = :name")
+    suspend fun deleteByModelName(name: String)
+}
+
+@Dao
+interface RuleModelDao {
+    @Query("SELECT * FROM rule_models ORDER BY name")
+    fun observeAll(): Flow<List<RuleModel>>
+
+    @Query("SELECT * FROM rule_models ORDER BY name")
+    suspend fun getAll(): List<RuleModel>
+
+    @Query("SELECT * FROM rule_models WHERE name = :name LIMIT 1")
+    suspend fun findByName(name: String): RuleModel?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(model: RuleModel): Long
+
+    @Query("UPDATE rule_models SET name = :newName, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun rename(id: Long, newName: String, updatedAt: java.util.Date)
+
+    @Query("DELETE FROM rule_models WHERE id = :id")
     suspend fun delete(id: Long)
 }

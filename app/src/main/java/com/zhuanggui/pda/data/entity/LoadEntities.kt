@@ -115,3 +115,19 @@ data class RuleLibEntry(
     val ignoreRepeat: Boolean = false,        // 忽略：可重复扫的条码扫到不记录（v11）
     val updatedAt: Date = Date()
 )
+
+/**
+ * 规则库型号（v13）：规则库维护以「型号名称」为主，先建型号，再逐个添加前缀规则。
+ * - name 唯一；允许型号下暂时没有规则（空型号）
+ * - 规则表 rule_library 仍按名称冗余保存（导出/选择沿用），改名时同步更新
+ * - 删除型号 = 删除其下全部规则
+ */
+@Entity(
+    tableName = "rule_models",
+    indices = [Index(value = ["name"], unique = true)]
+)
+data class RuleModel(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val updatedAt: Date = Date()
+)

@@ -2,7 +2,7 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回。
 
-**当前版本：v1.7.4（versionCode 22，数据库 v12）** ｜ 状态：签名体系已就绪，现场机已运行 v1.7.x 正式签名包（debug / release 同钥匙，可无缝互装）
+**当前版本：v1.7.5（versionCode 23，数据库 v13）** ｜ 状态：签名体系已就绪，现场机已运行 v1.7.x 正式签名包（debug / release 同钥匙，可无缝互装）
 
 ## 功能与操作流程
 
@@ -39,8 +39,9 @@
  ├─【继续装柜：柜号】快捷入口（最近有扫码记录时出现）：一键带出最近柜号，自动载入原规则 + 已扫码数量
  ├─【扫码记录查看】按「日期 + 柜号」聚合（两级）；单组 / 本日 / 批量删除（三步确认）
  │    └─ 长按本页标题「扫码记录」进「回收站」：逐条 / 全部撤回、清空（三次确认）
- └─【规则库】规则源导入（.xlsx/.xls/.csv/.txt）+ 规则编辑（按型号分组，同一型号可挂多条前缀；
-      每条可设 可重复扫 / 计入统计 / 查历史串号 / 忽略）；供设置页多选（选择弹窗以型号名称为主显示，前缀/开关为细则）
+ └─【规则库】以型号为组维护：先「新增型号」，再在型号行「＋ 添加规则」逐个添加前缀（列表默认折叠，只显示型号名）；
+      每条规则可设 可重复扫 / 计入统计 / 查历史串号 / 忽略；供设置页多选（选择弹窗以型号名称为主显示）
+      导入 / 导出 XLSX（型号名称 / 前缀 / 四个开关），便于拷到其他 PDA 维护
 ```
 
 ## 校验与报警逻辑（出库扫码）
@@ -119,7 +120,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序 + 流水号范围/末尾位数，17 项单测 + 语音报数自然读法 8 项，共 25 项）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 5 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序 + 流水号范围/末尾位数 + 语音读法 + 规则表解析，32 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 6 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在**仓库外** `E:\saoma-keystore\zhuanggui-release.jks`；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装（需 `run-as` 排障时装 debug）
 - ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份（备份说明随 keystore 目录）；**换签名身份 = 设备需卸载重装**（先快照、装后用快照回灌，见 `子项目计划.md`）——本机 2026-10-19 已完成一次性签名切换（快照 → 卸载 → 装新签名包 → 回灌验证，数据零丢失），此后 debug / release 互装均无需卸载
@@ -132,14 +133,15 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 
 - Kotlin + Jetpack Compose（单 Activity 导航）；Room（带版本迁移）；Apache POI（仅规则源导入解析 .xlsx/.xls 用）；无后端、无网络，多台 PDA 各自独立
 
-数据库 v12（`data/AppDatabase.kt`）：
+数据库 v13（`data/AppDatabase.kt`）：
 
 ```
 load_containers  装柜会话（柜号唯一：同号柜永远复用同一行；id 关联规则与记录）
 load_rules       本柜条码规则快照（prefix / allowDuplicate / countEnabled / checkHistory /
                  serialMin / serialMax / serialTailLen / ignoreRepeat）
 scan_records     扫码记录（每扫一码一条，含串号/重复/超量/辅助完整留痕；deletedAt = 软删除）
-rule_library     规则库（prefix 唯一 + name 型号 + allowDuplicate / countEnabled / checkHistory / ignoreRepeat）
+rule_models      规则库型号（name 唯一；允许空型号，v13）
+rule_library     规则库规则（prefix 唯一 + name 型号 + 四个开关）
 ```
 
 ```
@@ -148,8 +150,9 @@ rule_library     规则库（prefix 唯一 + name 型号 + allowDuplicate / coun
      v7→v8 load_rules 加 checkHistory；v8→v9 scan_records 加 barcode 索引；
      v9→v10 scan_records 加 operatorId；v10→v11 load_rules 加 serialMin/serialMax/ignoreRepeat、
      rule_library 加四个规则开关（历史行取旧行为默认值）；
-     v11→v12 load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 前缀后整段）
-迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9、9→10、10→11、11→12 单步 + 5→12 全链，真机运行 5 项）
+     v11→v12 load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 前缀后整段）；
+     v12→v13 新增 rule_models（型号表），现有规则名称去重回填
+迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9、9→10、10→11、11→12、12→13 单步 + 5→13 全链，真机运行 6 项）
 ```
 
 `ScanResult`：`OK / NOT_IN_LIST（历史遗留）/ OVER_LIMIT / SERIAL_MISMATCH / DUPLICATE / AUX`
@@ -166,17 +169,22 @@ app/src/main/java/com/zhuanggui/pda/
                  screen/（Home / OutboundSetup / OutboundScan / Records / Rules / Trash / ConfirmDialogs）、theme/
 ```
 
-## 规则源导入 / 导出
+## 规则源导入 / 导出（XLSX）
 
-- 支持 .xlsx / .xls / .csv / .txt / **.tsv**；第一列 = 条码前缀（**仅字母 + 数字**），第二列可选 = 名称（型号），第 3~6 列可选 = 可重复扫 / 计入统计 / 查历史串号 / 忽略（1/0、是/否）
-- 首行若是表头（barcode / prefix / 条码 / 前缀 等）自动跳过；前缀去空格转大写；同前缀去重（保留首个名称）
-- 回导 = 覆盖更新（按前缀），方便用 Excel 改完整表再导入；两列文件覆盖时保留库内原开关，带开关列的导出文件以文件为准
-- v1.7.4：规则库页新增「导出」→ `/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.tsv`（UTF-8 带 BOM，含四个开关）；拷到其他 PDA 用「导入」选该文件即可完整还原
+- 导出格式（推荐）：`型号名称 | 前缀 | 可重复扫 | 计入统计 | 查历史串号 | 忽略`（是/否）
+  - 每个型号可有多行（多个前缀）；空型号也导出为一行（前缀留空），导入时用于建空型号
+  - 路径：`/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.xlsx`（列宽已设置、首行冻结）
+- 导入：支持 .xlsx / .xls / .csv / .txt / .tsv
+  - 新 XLSX 按表头自动识别「型号名称在前」；旧文件（前缀在第一列）继续兼容
+  - 只有型号、没有前缀的行 = 建空型号
+  - 首行表头（型号名称/前缀/条码/barcode 等）自动跳过；前缀去空格转大写；同前缀去重
+  - 回导 = 覆盖更新（按前缀）：带开关列的导出文件以文件为准；两列旧文件覆盖时保留库内原开关
 - 导入的规则默认「不可重复扫 + 计入统计 + 不查历史 + 不忽略」；需要双码机/辅助码等设置时，导入后在规则库点「编辑」勾选
-- v1.7.0：规则库按型号分组，同一型号可挂多条前缀（新增时前缀栏可用逗号/空格/换行一次录入多条）
+- v1.7.5：规则库改为「型号优先」维护（先建型号，再逐个添加规则；列表按型号折叠显示）
 
 ## 版本历史
 
+- **v1.7.5（versionCode 23，DB v13）**：规则库「型号优先」维护——先「新增型号」，再在型号行点「＋ 添加规则」逐个添加前缀；列表默认折叠，只显示型号名称与规则条数，点型号行展开规则（可改名/删除型号，删除型号会连同其下规则删除）；导出改为 **XLSX**（型号名称 / 前缀 / 四个开关，是/否），列宽/表头已设置，导入按表头自动识别型号在前或前缀在前的两种格式；空型号可导出/导入；DB v12→v13 新增 `rule_models`（现有规则名称去重回填），历史规则行为不变；单测 32 项、迁移测试 6 项通过
 - **v1.7.4（versionCode 22，DB v12）**：规则库导出——「规则库」页新增「导出」，把全部规则写成与导入兼容的 TSV（前缀 / 名称型号 / 可重复扫 / 计入统计 / 查历史串号 / 忽略，UTF-8 带 BOM），保存到 `/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.tsv`；拷到其他 PDA 后用「导入」选择该文件即可完整还原（开关列随文件生效；普通两列文件覆盖导入时保留库内原开关）。导入端支持 .tsv，并兼容 1/0、是/否、true/false 的开关写法；新增解析单测 4 项（共 29 项）
 - **v1.7.3（versionCode 21，DB v12）**：「从规则库选择」弹窗改为**规则名称（型号）主显示**、前缀与开关作为次要细则（名称不一定记得住，方便按名称查找/选择）；过滤框提示改为「过滤型号/前缀」；名称留空时仍以前缀为主显示
 - **v1.7.2（versionCode 20，DB v12）**：流水号新增「末尾 N 位」模式——条码中间还有不参与核对的字符/数字、流水号在末尾时（如 `ASV12SDFWG05455056$`，前缀 `ASV12`、末尾 3 位 → 核对 `056`），在录入规则或规则行「设范围」弹窗填「末尾位数」N 即可：取条码去掉末尾字母/符号后的最后 N 位数字比对范围；0/空 = 旧语义（前缀后整段必须是数字）。规则行标签显示「末N位 1-300」，扫码页规则摘要同步带「末N位」；DB v11→v12（`load_rules.serialTailLen`，历史行默认 0，行为不变）
