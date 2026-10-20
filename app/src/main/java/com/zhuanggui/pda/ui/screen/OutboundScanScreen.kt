@@ -8,13 +8,16 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
@@ -33,6 +36,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -314,6 +318,13 @@ fun OutboundScanScreen(
         )
     }
 
+    // 扫码后记录列表回到第一行：最新记录始终显示在顶部（用户上滑查看历史后，下一枪自动回顶）
+    val recordListState = rememberLazyListState()
+    val newestRecordId = records.firstOrNull()?.id
+    LaunchedEffect(newestRecordId) {
+        if (newestRecordId != null) recordListState.scrollToItem(0)
+    }
+
     Scaffold { pad ->
         Column(
             Modifier
@@ -328,7 +339,7 @@ fun OutboundScanScreen(
                     }
                 }
                 .padding(pad)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .padding(horizontal = 8.dp, vertical = 3.dp)
         ) {
             // ---------- 顶部工具条 ----------
             Row(
@@ -336,40 +347,50 @@ fun OutboundScanScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("出库扫码", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = { showAlarmSettings = true }) { Text("震动和声音设置", fontSize = 11.sp) }
-                    OutlinedButton(onClick = onBackToSetup) { Text("返回设置", fontSize = 12.sp) }
+                Text("出库扫码", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedButton(
+                        onClick = { showAlarmSettings = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) { Text("震动和声音设置", fontSize = 10.sp) }
+                    OutlinedButton(
+                        onClick = onBackToSetup,
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) { Text("返回设置", fontSize = 11.sp) }
                 }
             }
 
             // ---------- 撤回 / 前进 ----------
             Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 OutlinedButton(
                     onClick = onUndo,
                     enabled = canUndo,
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 6.dp),
+                    modifier = Modifier.weight(1f).height(32.dp)
                 ) {
-                    Text("↶ 撤回上一步", fontSize = 11.sp)
+                    Text("↶ 撤回上一步", fontSize = 10.sp)
                 }
                 OutlinedButton(
                     onClick = onRedo,
                     enabled = canRedo,
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 6.dp),
+                    modifier = Modifier.weight(1f).height(32.dp)
                 ) {
-                    Text("↷ 前进（重做）", fontSize = 11.sp)
+                    Text("↷ 前进（重做）", fontSize = 10.sp)
                 }
             }
 
             // ---------- 柜号 & 规则 ----------
-            Card(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                Column(Modifier.padding(8.dp)) {
+            Card(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
                     Text(
                         "柜号：${state.activeContainer?.containerNo ?: "—"}",
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold
+                        fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold
                     )
                     Text(
                         "规则：${
@@ -390,37 +411,46 @@ fun OutboundScanScreen(
                                 r.prefix + if (tags.isEmpty()) "" else "（${tags.joinToString("/")}）"
                             }.ifBlank { "—" }
                         }",
-                        fontSize = 12.sp, color = Color.Gray
+                        fontSize = 10.sp, lineHeight = 14.sp, color = Color.Gray,
+                        modifier = Modifier.padding(top = 1.dp)
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.padding(top = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
                             "计划装柜数量：${if (state.total > 0) state.total.toString() else "不限"}",
-                            fontSize = 14.sp
+                            fontSize = 12.sp, lineHeight = 16.sp
                         )
                         if (state.operatorId.isNotBlank()) {
                             Text(
                                 "　操作员：${state.operatorId}",
-                                fontSize = 12.sp, color = Color.Gray
+                                fontSize = 10.sp, lineHeight = 14.sp, color = Color.Gray
                             )
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.padding(top = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
                             "已扫码数量：${state.okCount}",
-                            fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold,
                             color = if (state.total > 0 && state.okCount >= state.total) Color(0xFF388E3C)
                             else Color.Unspecified
                         )
                         Text(
                             "  累计记录：${state.totalRecords}",
-                            fontSize = 12.sp, color = Color.Gray
+                            fontSize = 10.sp, lineHeight = 14.sp, color = Color.Gray
                         )
                     }
                     Text(
                         if (state.lastFullCode.isBlank()) "每扫一码自动保存到 TSV 文件"
                         else if (state.fileSaved) "✓ 已自动保存（${FileExporter.displayPath()}/）"
                         else "⚠ 最近一条未写入文件，请检查存储权限",
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                        modifier = Modifier.padding(top = 2.dp),
                         color = if (state.lastFullCode.isNotBlank() && !state.fileSaved)
                             Color(0xFFD32F2F) else Color(0xFF388E3C)
                     )
@@ -429,8 +459,8 @@ fun OutboundScanScreen(
 
             // ---------- 计数卡 ----------
             Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 OutCount("正常", state.okCount, Color(0xFF388E3C), ScanResult.OK, Modifier.weight(1f))
                 OutCount("串号", state.mismatchCount, Color(0xFFD32F2F), ScanResult.SERIAL_MISMATCH, Modifier.weight(1f))
@@ -439,20 +469,20 @@ fun OutboundScanScreen(
             }
 
             // ---------- 最新输出：柜号，条码 ----------
-            Card(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                Column(Modifier.padding(8.dp)) {
-                    Text("输出：", fontSize = 11.sp, color = Color.Gray)
+            Card(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Text("输出：", fontSize = 10.sp, color = Color.Gray)
                     Text(
                         state.lastFullCode.ifBlank { "—" },
-                        fontSize = 18.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        state.lastResult?.let { ResultIcon(it, 14) }
+                        state.lastResult?.let { ResultIcon(it, 13) }
                         Text(
                             state.lastMessage,
-                            fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            fontSize = 12.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier.padding(start = if (state.lastResult != null) 4.dp else 0.dp)
                         )
                     }
@@ -462,25 +492,26 @@ fun OutboundScanScreen(
             // ---------- 扫码录入（HID 扫码枪 / 手动） ----------
             com.zhuanggui.pda.ui.HidScanField(
                 onSubmit = { onManual(it) },
-                modifier = Modifier.padding(top = 4.dp)
+                modifier = Modifier.padding(top = 2.dp)
             )
 
             // ---------- 记录明细 ----------
             Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+                Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 1.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("本柜记录", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("本柜记录", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(
                     "共 ${state.totalRecords} 条 · 最近 ${records.size} 条可点按删除（正常记录需三次确认）",
-                    fontSize = 11.sp, color = Color.Gray
+                    fontSize = 9.sp, color = Color.Gray
                 )
             }
             HorizontalDivider()
 
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                state = recordListState,
+                verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 items(records, key = { it.id }) { r ->
                     RecordRow(
@@ -506,17 +537,17 @@ fun OutboundScanScreen(
 private fun OutCount(label: String, count: Int, color: Color, result: ScanResult, modifier: Modifier = Modifier) {
     Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = Color.White)) {
         Column(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
                 imageVector = resultIcon(result),
                 contentDescription = null,
                 tint = color,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(12.dp)
             )
-            Text(count.toString(), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = color)
-            Text(label, fontSize = 11.sp)
+            Text(count.toString(), fontSize = 17.sp, fontWeight = FontWeight.Bold, color = color)
+            Text(label, fontSize = 10.sp)
         }
     }
 }
@@ -539,36 +570,36 @@ private fun RecordRow(
         Modifier
             .fillMaxWidth()
             .then(if (deletable) Modifier.clickable(onClick = onDeleteClick) else Modifier)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .padding(horizontal = 3.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .background(tagColor)
-                .padding(horizontal = 5.dp, vertical = 1.dp)
+                .padding(horizontal = 4.dp, vertical = 0.dp)
         ) {
             Icon(
                 imageVector = resultIcon(r.result),
                 contentDescription = null,
                 tint = Color.White,
-                modifier = Modifier.size(11.dp)
+                modifier = Modifier.size(10.dp)
             )
             Text(
                 tag,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 color = Color.White,
                 modifier = Modifier.padding(start = 3.dp)
             )
         }
         Text(
             "  ${r.fullCode}",
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             modifier = Modifier.weight(1f),
             maxLines = 1, overflow = TextOverflow.Ellipsis
         )
         if (deletable) {
-            Text("点按删除", fontSize = 10.sp, color = Color.Gray)
+            Text("点按删除", fontSize = 9.sp, color = Color.Gray)
         }
     }
 }

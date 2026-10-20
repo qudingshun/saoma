@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -31,13 +32,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,18 +47,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.ui.CompactTextField
 import com.zhuanggui.pda.ui.OutboundSetupState
 import com.zhuanggui.pda.ui.RuleSpec
 import com.zhuanggui.pda.ui.SetupScanTarget
@@ -130,16 +131,20 @@ fun OutboundSetupScreen(
             Modifier
                 .padding(pad)
                 .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 2.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+                .padding(horizontal = 8.dp, vertical = 0.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("出库扫码设置", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                OutlinedButton(onClick = onBack) { Text("返回", fontSize = 12.sp) }
+                Text("出库扫码设置", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onBack,
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier.height(34.dp)
+                ) { Text("返回", fontSize = 11.sp) }
             }
 
             if (state.scannedQuantity > 0) {
@@ -153,8 +158,8 @@ fun OutboundSetupScreen(
                         else "该柜号今天已扫码 ${state.scannedQuantity} 件" +
                             if (plan > 0) "（$planLabel $plan）：继续扫码将接着计数，扫满计划数量时提示装柜完成"
                             else "（计划不限）：继续扫码将接着计数",
-                        Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        fontSize = 13.sp
+                        Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        fontSize = 11.sp
                     )
                 }
             }
@@ -164,30 +169,21 @@ fun OutboundSetupScreen(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
+                CompactTextField(
                     value = state.containerNo,
                     onValueChange = onContainerNo,
-                    label = { Text("柜号") },
-                    placeholder = { Text("字母+数字") },
-                    singleLine = true,
-                    textStyle = TextStyle(fontSize = 15.sp),
+                    label = "柜号",
+                    placeholder = "字母+数字",
                     modifier = Modifier.weight(1f)
                 )
-                OutlinedTextField(
+                CompactTextField(
                     value = state.totalQuantity,
                     onValueChange = onTotal,
-                    label = { Text("计划装柜数量", fontSize = 14.sp) },
-                    placeholder = {
-                        Text(
-                            if (state.scannedQuantity > 0 && state.storedPlan > 0)
-                                "留空 = 已存计划 ${state.storedPlan}"
-                            else "0/空 = 不限",
-                            fontSize = 12.sp
-                        )
-                    },
-                    singleLine = true,
-                    textStyle = TextStyle(fontSize = 15.sp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    label = "计划装柜数量",
+                    placeholder = if (state.scannedQuantity > 0 && state.storedPlan > 0)
+                        "留空 = 已存计划 ${state.storedPlan}"
+                    else "0/空 = 不限",
+                    numeric = true,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -198,24 +194,24 @@ fun OutboundSetupScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Box(Modifier.weight(1f)) {
-                    OutlinedTextField(
+                    CompactTextField(
                         value = state.operatorId,
                         onValueChange = onOperatorId,
-                        label = { Text("操作员工号", fontSize = 14.sp) },
-                        placeholder = { Text("默认 A/B/C/D，可手输", fontSize = 11.sp) },
-                        singleLine = true,
-                        textStyle = TextStyle(fontSize = 15.sp),
-                        trailingIcon = {
-                            IconButton(onClick = { operatorMenu = true }) {
-                                Icon(Icons.Filled.ArrowDropDown, contentDescription = "选择工号")
-                            }
+                        label = "操作员工号",
+                        placeholder = "默认 A/B/C/D，可手输",
+                        trailing = {
+                            Icon(
+                                Icons.Filled.ArrowDropDown,
+                                contentDescription = "选择工号",
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clickable { operatorMenu = true }
+                            )
                         },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged {
-                                // 焦点路由：工号栏聚焦时扫码填入工号（替换），其余位置填规则栏
-                                onScanTarget(if (it.isFocused) SetupScanTarget.OPERATOR else SetupScanTarget.RULE)
-                            }
+                        onFocusChanged = {
+                            // 焦点路由：工号栏聚焦时扫码填入工号（替换），其余位置填规则栏
+                            onScanTarget(if (it) SetupScanTarget.OPERATOR else SetupScanTarget.RULE)
+                        }
                     )
                     DropdownMenu(
                         expanded = operatorMenu,
@@ -233,93 +229,88 @@ fun OutboundSetupScreen(
                     }
                 }
                 // 已扫码数量（= 已装柜数量）：与工号栏同款布局，数字不可修改（只读）
-                OutlinedTextField(
+                CompactTextField(
                     value = "${state.scannedQuantity} 件",
                     onValueChange = {},
+                    label = "已扫码数量（今天）",
                     readOnly = true,
-                    label = { Text("已扫码数量（今天）", fontSize = 14.sp) },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        fontSize = 15.sp,
-                        color = if (state.scannedQuantity > 0) Color(0xFF2E7D32) else Color(0xFF555555)
-                    ),
+                    textColor = if (state.scannedQuantity > 0) Color(0xFF2E7D32) else Color(0xFF555555),
                     modifier = Modifier.weight(1f)
                 )
             }
 
             // ---------- 录入规则（前缀）+ 流水号范围（v1.7.0：限定数据范围） ----------
-            OutlinedTextField(
+            CompactTextField(
                 value = state.ruleInput,
                 onValueChange = onRuleInput,
-                label = { Text("录入规则（前缀）", fontSize = 13.sp) },
-                singleLine = true,
-                textStyle = TextStyle(fontSize = 16.sp),
-                modifier = Modifier.fillMaxWidth()
+                label = "录入规则（前缀）"
             )
 
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
+                CompactTextField(
                     value = state.ruleSerialMin,
                     onValueChange = onRuleSerialMin,
-                    label = { Text("流水号最小值", fontSize = 13.sp) },
-                    placeholder = { Text("选填，留空 = 不限", fontSize = 11.sp) },
-                    singleLine = true,
-                    textStyle = TextStyle(fontSize = 14.sp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    label = "流水号最小值",
+                    placeholder = "选填，留空 = 不限",
+                    numeric = true,
+                    textSize = 13.sp,
                     modifier = Modifier.weight(1f)
                 )
-                OutlinedTextField(
+                CompactTextField(
                     value = state.ruleSerialMax,
                     onValueChange = onRuleSerialMax,
-                    label = { Text("流水号最大值", fontSize = 13.sp) },
-                    placeholder = { Text("选填，留空 = 不限", fontSize = 11.sp) },
-                    singleLine = true,
-                    textStyle = TextStyle(fontSize = 14.sp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    label = "流水号最大值",
+                    placeholder = "选填，留空 = 不限",
+                    numeric = true,
+                    textSize = 13.sp,
                     modifier = Modifier.weight(1f)
                 )
             }
 
-            // 新增规则时的勾选（双码机选项 + 查历史串号 + 忽略）
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = state.ruleAllowDup,
-                    onCheckedChange = onRuleAllowDup
-                )
-                Text("可重复扫", fontSize = 13.sp)
-                Spacer(Modifier.width(8.dp))
-                Checkbox(
-                    checked = state.ruleCount,
-                    onCheckedChange = onRuleCount
-                )
-                Text("计入统计", fontSize = 13.sp)
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = state.ruleCheckHistory,
-                    onCheckedChange = onRuleCheckHistory
-                )
-                Text("查历史串号", fontSize = 13.sp)
-                Spacer(Modifier.width(8.dp))
-                Checkbox(
-                    checked = state.ruleAllowDup && state.ruleIgnoreRepeat,
-                    onCheckedChange = onRuleIgnore,
-                    enabled = state.ruleAllowDup
-                )
-                Text(
-                    "忽略（不记录）",
-                    fontSize = 13.sp,
-                    color = if (state.ruleAllowDup) Color.Unspecified else Color.Gray
-                )
+            // 新增规则时的勾选（双码机选项 + 查历史串号 + 忽略）；紧凑行高
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = state.ruleAllowDup,
+                            onCheckedChange = onRuleAllowDup
+                        )
+                        Text("可重复扫", fontSize = 12.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Checkbox(
+                            checked = state.ruleCount,
+                            onCheckedChange = onRuleCount
+                        )
+                        Text("计入统计", fontSize = 12.sp)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = state.ruleCheckHistory,
+                            onCheckedChange = onRuleCheckHistory
+                        )
+                        Text("查历史串号", fontSize = 12.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Checkbox(
+                            checked = state.ruleAllowDup && state.ruleIgnoreRepeat,
+                            onCheckedChange = onRuleIgnore,
+                            enabled = state.ruleAllowDup
+                        )
+                        Text(
+                            "忽略（不记录）",
+                            fontSize = 12.sp,
+                            color = if (state.ruleAllowDup) Color.Unspecified else Color.Gray
+                        )
+                    }
+                }
             }
 
             // 规则说明（默认收起，点击展开；展开时为固定小窗，内部下拉滚动查看）
@@ -327,12 +318,12 @@ fun OutboundSetupScreen(
                 Modifier
                     .fillMaxWidth()
                     .clickable { showRuleHelp = !showRuleHelp }
-                    .padding(vertical = 2.dp),
+                    .padding(vertical = 1.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     if (showRuleHelp) "规则说明 ▾（点击收起）" else "规则说明 ▸（点击展开）",
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     color = Color(0xFF666666)
                 )
             }
@@ -340,22 +331,22 @@ fun OutboundSetupScreen(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(60.dp)
+                        .height(50.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color(0xFFF2F2F2))
                         .border(0.5.dp, Color(0xFFD0D0D0), RoundedCornerShape(4.dp))
                 ) {
                     Text(
                         "条码须以规则前缀开头；设了流水号范围时，前缀后的数字须落在最小~最大值之间，否则报“串号”。\n" +
-                            "流水号范围可在规则行点「流水 …」补录/修改（从规则库导入的规则也可以）；两项留空 = 不限制。\n" +
+                            "流水号范围可在规则行点「设范围 / 流水 …」补录/修改（从规则库导入的规则也可以）；两项留空 = 不限制。\n" +
                             "双码机：固定码 = 勾「可重复扫」+「忽略」（扫到不记录）或取消「计入统计」（辅助码，只留痕）；流水码 = 只勾「计入统计」。\n" +
                             "查历史串号：条码在其他柜记录里出现过 → 报串号（防旧箱混入本柜）；忽略仅「可重复扫」时生效。",
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         color = Color(0xFF666666),
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
             }
@@ -369,32 +360,32 @@ fun OutboundSetupScreen(
                     onClick = onAddRule,
                     enabled = state.ruleInput.isNotBlank(),
                     contentPadding = PaddingValues(horizontal = 6.dp),
-                    modifier = Modifier.weight(1f).height(40.dp)
+                    modifier = Modifier.weight(1f).height(34.dp)
                 ) {
-                    Text("添加规则", fontSize = 13.sp)
+                    Text("添加规则", fontSize = 11.sp)
                 }
                 OutlinedButton(
                     onClick = { showPicker = true },
                     contentPadding = PaddingValues(horizontal = 6.dp),
-                    modifier = Modifier.weight(1f).height(40.dp)
+                    modifier = Modifier.weight(1f).height(34.dp)
                 ) {
-                    Text("从规则库选择", fontSize = 12.sp)
+                    Text("从规则库选择", fontSize = 11.sp)
                 }
                 OutlinedButton(
                     onClick = onOpenRuleLibrary,
                     contentPadding = PaddingValues(horizontal = 6.dp),
-                    modifier = Modifier.weight(1f).height(40.dp)
+                    modifier = Modifier.weight(1f).height(34.dp)
                 ) {
-                    Text("规则库管理", fontSize = 12.sp)
+                    Text("规则库管理", fontSize = 11.sp)
                 }
             }
 
             Button(
                 onClick = onStart,
                 enabled = state.containerNo.isNotBlank() && state.rules.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().height(48.dp)
+                modifier = Modifier.fillMaxWidth().height(42.dp)
             ) {
-                Text("装柜", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("装柜", fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
 
             // ---------- 本柜条码规则（移到【装柜】按钮下方；固定区域，内部下拉滚动） ----------
@@ -404,95 +395,98 @@ fun OutboundSetupScreen(
             ) {
                 Text(
                     "本柜条码规则（前缀）",
-                    fontSize = 15.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
                 if (state.containerNo.isBlank() || state.rules.isEmpty()) {
-                    Text("请先填写柜号并加规则", fontSize = 10.sp, color = Color(0xFFD32F2F))
+                    Text("请先填写柜号并加规则", fontSize = 9.sp, color = Color(0xFFD32F2F))
                 }
             }
             Card(Modifier.fillMaxWidth().weight(1f)) {
                 if (state.rules.isEmpty()) {
                     Text(
                         "尚未添加规则（扫码自动填入 / 手动录入 / 从规则库选择；拼装柜可加多条）",
-                        fontSize = 13.sp, color = Color(0xFFD32F2F),
-                        modifier = Modifier.padding(10.dp)
+                        fontSize = 11.sp, color = Color(0xFFD32F2F),
+                        modifier = Modifier.padding(6.dp)
                     )
                 } else {
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(vertical = 2.dp)
-                    ) {
-                        itemsIndexed(state.rules, key = { _, r -> r.prefix }) { i, rule ->
-                            Column(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "规则${i + 1}：${rule.prefix}",
-                                        fontSize = 14.sp,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    // 流水号范围（点击补录/修改；从规则库导入的规则同样可设）
-                                    Text(
-                                        serialRangeLabel(rule),
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF1976D2),
-                                        textDecoration = TextDecoration.Underline,
-                                        maxLines = 1,
-                                        modifier = Modifier
-                                            .clickable { serialRule = rule }
-                                            .padding(horizontal = 4.dp, vertical = 8.dp)
-                                    )
-                                    // 忽略（仅可重复扫时生效）：扫到不记录、不落盘、不计数
-                                    Checkbox(
-                                        checked = rule.allowDuplicate && rule.ignoreRepeat,
-                                        onCheckedChange = {
-                                            onRuleFlags(rule.prefix, rule.allowDuplicate, rule.countEnabled, rule.checkHistory, it)
-                                        },
-                                        enabled = rule.allowDuplicate
-                                    )
-                                    Text(
-                                        "忽略",
-                                        fontSize = 11.sp,
-                                        color = if (rule.allowDuplicate) Color.Unspecified else Color.Gray
-                                    )
-                                    Text(
-                                        "删除", fontSize = 13.sp, color = Color(0xFFD32F2F),
-                                        modifier = Modifier
-                                            .clickable { onRemoveRule(rule.prefix) }
-                                            .padding(start = 10.dp, top = 8.dp, bottom = 8.dp, end = 4.dp)
-                                    )
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                        LazyColumn(
+                            Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(vertical = 0.dp)
+                        ) {
+                            itemsIndexed(state.rules, key = { _, r -> r.prefix }) { i, rule ->
+                                Column(Modifier.fillMaxWidth()) {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "规则${i + 1}：${rule.prefix}",
+                                            fontSize = 13.sp,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        // 流水号范围（点击补录/修改；从规则库导入的规则同样可设）
+                                        Text(
+                                            serialRangeLabel(rule),
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF1976D2),
+                                            textDecoration = TextDecoration.Underline,
+                                            maxLines = 1,
+                                            modifier = Modifier
+                                                .clickable { serialRule = rule }
+                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                        )
+                                        // 忽略（仅可重复扫时生效）：扫到不记录、不落盘、不计数
+                                        Checkbox(
+                                            checked = rule.allowDuplicate && rule.ignoreRepeat,
+                                            onCheckedChange = {
+                                                onRuleFlags(rule.prefix, rule.allowDuplicate, rule.countEnabled, rule.checkHistory, it)
+                                            },
+                                            enabled = rule.allowDuplicate
+                                        )
+                                        Text(
+                                            "忽略",
+                                            fontSize = 10.sp,
+                                            color = if (rule.allowDuplicate) Color.Unspecified else Color.Gray
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = rule.allowDuplicate,
+                                            onCheckedChange = {
+                                                onRuleFlags(rule.prefix, it, rule.countEnabled, rule.checkHistory, rule.ignoreRepeat)
+                                            }
+                                        )
+                                        Text("可重复扫", fontSize = 11.sp)
+                                        Checkbox(
+                                            checked = rule.countEnabled,
+                                            onCheckedChange = {
+                                                onRuleFlags(rule.prefix, rule.allowDuplicate, it, rule.checkHistory, rule.ignoreRepeat)
+                                            }
+                                        )
+                                        Text("计入统计", fontSize = 11.sp)
+                                        Checkbox(
+                                            checked = rule.checkHistory,
+                                            onCheckedChange = {
+                                                onRuleFlags(rule.prefix, rule.allowDuplicate, rule.countEnabled, it, rule.ignoreRepeat)
+                                            }
+                                        )
+                                        Text("查历史串号", fontSize = 11.sp)
+                                        Spacer(Modifier.weight(1f))
+                                        Text(
+                                            "删除", fontSize = 12.sp, color = Color(0xFFD32F2F),
+                                            modifier = Modifier
+                                                .clickable { onRemoveRule(rule.prefix) }
+                                                .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 2.dp)
+                                        )
+                                    }
                                 }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = rule.allowDuplicate,
-                                        onCheckedChange = {
-                                            onRuleFlags(rule.prefix, it, rule.countEnabled, rule.checkHistory, rule.ignoreRepeat)
-                                        }
-                                    )
-                                    Text("可重复扫", fontSize = 12.sp)
-                                    Checkbox(
-                                        checked = rule.countEnabled,
-                                        onCheckedChange = {
-                                            onRuleFlags(rule.prefix, rule.allowDuplicate, it, rule.checkHistory, rule.ignoreRepeat)
-                                        }
-                                    )
-                                    Text("计入统计", fontSize = 12.sp)
-                                    Checkbox(
-                                        checked = rule.checkHistory,
-                                        onCheckedChange = {
-                                            onRuleFlags(rule.prefix, rule.allowDuplicate, rule.countEnabled, it, rule.ignoreRepeat)
-                                        }
-                                    )
-                                    Text("查历史串号", fontSize = 12.sp)
-                                }
+                                if (i < state.rules.lastIndex) HorizontalDivider(thickness = 0.5.dp)
                             }
-                            if (i < state.rules.lastIndex) HorizontalDivider(thickness = 0.5.dp)
                         }
                     }
                 }
@@ -506,7 +500,7 @@ private fun serialRangeLabel(rule: RuleSpec): String = when {
     rule.serialMin.isNotBlank() && rule.serialMax.isNotBlank() -> "流水 ${rule.serialMin}-${rule.serialMax}"
     rule.serialMin.isNotBlank() -> "流水 ≥${rule.serialMin}"
     rule.serialMax.isNotBlank() -> "流水 ≤${rule.serialMax}"
-    else -> "流水 不限"
+    else -> "设范围"
 }
 
 /** 流水号范围编辑弹窗（从规则库导入 / 手动录入的规则均可补录；两项留空 = 清除限制） */

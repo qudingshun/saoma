@@ -2,12 +2,11 @@ package com.zhuanggui.pda.ui
 
 import android.os.SystemClock
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,9 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -52,8 +49,11 @@ fun HidScanField(
     val detector = remember { BurstDetector() }
 
     // 进入页面自动聚焦：扫码枪的字符只能进入“聚焦中”的输入框
+    // 但不主动弹软键盘：把屏幕留给计数/记录区（点输入框仍可手动录入）
     LaunchedEffect(Unit) {
         runCatching { focusRequester.requestFocus() }
+        delay(150)
+        keyboard?.hide()
     }
 
     fun submit() {
@@ -78,9 +78,9 @@ fun HidScanField(
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        OutlinedTextField(
+        CompactTextField(
             value = code,
             onValueChange = { v ->
                 val filtered = v.filter { it != '\r' && it != '\n' && it != '\t' }
@@ -93,16 +93,17 @@ fun HidScanField(
                 }
                 code = filtered
             },
-            label = { Text(label) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { submit() }),
-            modifier = Modifier.weight(1f).focusRequester(focusRequester)
+            label = label,
+            onDone = { submit() },
+            focusRequester = focusRequester,
+            modifier = Modifier.weight(1f)
         )
         Button(
             onClick = { submit() },
-            enabled = code.isNotBlank()
-        ) { Text("录入", fontSize = 16.sp) }
+            enabled = code.isNotBlank(),
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            modifier = Modifier.height(38.dp)
+        ) { Text("录入", fontSize = 13.sp) }
     }
 }
 
