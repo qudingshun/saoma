@@ -105,6 +105,16 @@ fun ScannerSetupScreen(
                         contentPadding = PaddingValues(horizontal = 10.dp),
                         modifier = Modifier.fillMaxWidth().height(46.dp)
                     ) { Text("一键打开「扫描配置」", fontSize = 14.sp) }
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(
+                        onClick = {
+                            val ok = ScannerDiagnostics.openScannerDevOptions(context)
+                            message = if (ok) "已打开扫描工具的开发者选项：那里显示本机实际的广播名称与键值（多数机型不需要密码）"
+                            else "该机型没有开发者选项入口，可看下方默认参数"
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        modifier = Modifier.fillMaxWidth().height(40.dp)
+                    ) { Text("打开开发者选项（查看本机广播名/键值）", fontSize = 12.sp) }
                 }
             }
 

@@ -31,6 +31,7 @@ object ScannerDiagnostics {
     /** 常见机型上的扫描相关系统包（按优先级） */
     private val CANDIDATES = listOf(
         "com.seuic.scanner.activity" to "扫描配置 / 扫描工具（东集）",
+        "com.android.scanningsetting" to "系统扫描设置（部分固件）",
         "com.seuic.scanservice" to "扫描服务（东集）",
         "com.android.server.scannerservice" to "系统扫码服务",
         "com.seuic.scanner" to "扫描设置（部分固件）"
@@ -40,8 +41,8 @@ object ScannerDiagnostics {
     val SETUP_STEPS: String = """
 【PDA 端扫描设置（东集 CRUISE2 等）】
 
-1. 打开 PDA 自带的「扫描配置」应用（App 内「扫描设置」页可一键打开）。
-2. 进入「应用扫描配置」→「已配置应用」→ 选择「成品出库」。
+1. 打开 PDA 自带的「扫描工具 / 扫描配置」应用（App 内「扫描设置」页可一键打开）。
+2. 进入「应用扫描配置」→「已配置应用」→ 添加并选择「成品出库」。
 3. 条码发送方式：广播
 4. 广播名称：${ScannerManager.PRIMARY_ACTION}
    （本机实际值可在「扫描工具 → 设置 → 开发者选项」查看）
@@ -51,6 +52,9 @@ object ScannerDiagnostics {
 
 方式 B（键盘输出）：不配置广播，扫码内容直接输入到当前聚焦的输入框；
    本 App 扫码页的输入框会自动聚焦并接收（HID 兜底），但只有扫码页能接收。
+
+说明：多数机型打开「开发者设置项」不需要密码；若弹出「输入开发者密码」，
+   出厂默认密码多为 pWD,C!T1?（可在 扫描工具 → 管理 → 修改管理员密码 里自行修改）。
 
 注意：
 - 不要停用/卸载「扫描工具 / 扫描服务」，否则完全扫不出码。
@@ -120,6 +124,24 @@ object ScannerDiagnostics {
     }.getOrElse {
         Log.d(TAG, "open app details failed: ${it.message}")
         false
+    }
+
+    /** 打开系统扫描服务的「开发者选项」：那里能看到本机实际的广播名称/键值 */
+    fun openScannerDevOptions(context: Context): Boolean {
+        val targets = listOf(
+            "com.seuic.scanner.activity" to "com.seuic.scanner.activity.DevSettingsActivity",
+            "com.seuic.scanner.activity" to "com.seuic.scanner.activity.MainActivity"
+        )
+        for ((pkg, cls) in targets) {
+            val intent = Intent().apply {
+                component = android.content.ComponentName(pkg, cls)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }
+                .onSuccess { return true }
+                .onFailure { Log.d(TAG, "start $cls failed: ${it.message}") }
+        }
+        return false
     }
 
     /**
