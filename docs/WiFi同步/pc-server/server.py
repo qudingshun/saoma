@@ -12,11 +12,13 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import sys
 import threading
 import webbrowser
+import zipfile
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -123,6 +125,19 @@ CREATE TABLE IF NOT EXISTS acks (
   at          TEXT NOT NULL
 );
 
+-- 多 PDA 管理（v1.10.0）：名称/文件夹/最近在线；扫描记录按设备分目录
+CREATE TABLE IF NOT EXISTS devices (
+  device_id   TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  folder      TEXT NOT NULL,
+  app_version TEXT NOT NULL DEFAULT '',
+  last_seen   TEXT NOT NULL,
+  last_ip     TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_name   ON devices(name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_folder ON devices(folder);
+
 -- 规则库快照（v1.9.0）：单行；rev 每次上传 +1，PDA 据此判断是否有新版本
 CREATE TABLE IF NOT EXISTS rulelib (
   id           INTEGER PRIMARY KEY CHECK (id = 1),
@@ -186,6 +201,80 @@ def _safe_file_name(name: str) -> str:
     return cleaned or "未填柜号"
 
 
+DEVICE_RESERVED = {
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
+    "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+    "LPT7", "LPT8", "LPT9",
+}
+
+
+def _safe_device_name(raw: str, fallback: str = "未命名PDA") -> str:
+    """PDA 名称 → 安全文件夹名（保留中文/字母/数字/空格/下划线）"""
+    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", (raw or "").strip())
+    s = s.strip(" .")[:32]
+    if not s:
+        s = fallback
+    if s.upper() in DEVICE_RESERVED:
+        s += "_PDA"
+    return s
+
+
+def _ensure_device(conn, device_id: str, app_version: str = "", ip: str = "", touch: bool = True):
+    """登记/更新一台 PDA；返回 devices 行。调用方负责 commit。
+    touch=False 用于启动时重建文件：只补登记，不刷新「最近同步」。"""
+    device_id = (device_id or "").strip()[:64]
+    if not device_id or device_id == "?":
+        device_id = "PDA-未知"
+    now = now_iso()
+    row = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+    if row:
+        if touch:
+            conn.execute(
+                "UPDATE devices SET last_seen=?, last_ip=?, "
+                "app_version=CASE WHEN ?<>'' THEN ? ELSE app_version END WHERE device_id=?",
+                (now, ip or row["last_ip"] or "", (app_version or "")[:32],
+                 (app_version or "")[:32], device_id))
+            return conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        return row
+
+    base = _safe_device_name(device_id, "未命名PDA")
+    name = base
+    n = 2
+    while (conn.execute("SELECT 1 FROM devices WHERE name=? OR folder=?", (name, name)).fetchone()
+           or (RECORD_DIR / name).exists() or (TRASH_DIR / name).exists()):
+        name = _safe_device_name(f"{base}-{n}", base)
+        n += 1
+    conn.execute(
+        "INSERT INTO devices(device_id,name,folder,app_version,last_seen,last_ip,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (device_id, name, name, (app_version or "")[:32], now, ip or "", now))
+    return conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+
+
+def _ip_of(request: Request) -> str:
+    return request.client.host if request.client else ""
+
+
+def _migrate_legacy_layout():
+    """v1.10.0 前是 装柜记录/日期/柜号.tsv；升级后移到 _旧版混合文件_*，再按设备重建。"""
+    stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+    for base in (RECORD_DIR, TRASH_DIR):
+        if not base.exists():
+            continue
+        legacy = [p for p in base.iterdir()
+                  if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name)
+                  and any(f.is_file() and f.suffix.lower() == ".tsv" for f in p.iterdir())]
+        if not legacy:
+            continue
+        dest = base / f"_旧版混合文件_{stamp}"
+        dest.mkdir(parents=True, exist_ok=True)
+        for p in legacy:
+            target = dest / p.name
+            if target.exists():
+                target = dest / f"{p.name}_{stamp}"
+            shutil.move(str(p), str(target))
+
+
 def _write_tsv(path: Path, rows: list[sqlite3.Row]) -> None:
     """整文件重写（临时文件 + 替换，避免 Excel 打开时读到半截）"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,11 +295,14 @@ def _write_tsv(path: Path, rows: list[sqlite3.Row]) -> None:
     os.replace(tmp, path)
 
 
-def rebuild_container_files(conn, container_no: str) -> int:
-    """把一个柜号的记录按「日期/柜号.tsv」重写到 装柜记录 / 回收站；返回写出的文件数"""
+def rebuild_container_files(conn, device_id: str, container_no: str) -> int:
+    """把某台 PDA 的一个柜号记录按「PDA名/日期/柜号.tsv」重写；返回写出的文件数"""
+    dev = _ensure_device(conn, device_id, touch=False)
+    folder = dev["folder"]
     rows = conn.execute(
-        "SELECT * FROM scans WHERE COALESCE(container_no, '') = ? "
-        "ORDER BY scanned_at, uid", (container_no or "",)).fetchall()
+        "SELECT * FROM scans WHERE COALESCE(NULLIF(device_id, ''), 'PDA-未知') = ? "
+        "AND COALESCE(container_no, '') = ? ORDER BY scanned_at, uid",
+        (dev["device_id"], container_no or "")).fetchall()
     active: dict[str, list] = {}
     trash: dict[str, list] = {}
     for r in rows:
@@ -220,11 +312,12 @@ def rebuild_container_files(conn, container_no: str) -> int:
     name = _safe_file_name(container_no) + ".tsv"
     written = 0
     for base, groups in ((RECORD_DIR, active), (TRASH_DIR, trash)):
-        if base.exists():
-            for day_dir in list(base.iterdir()):
+        dev_base = base / folder
+        if dev_base.exists():
+            for day_dir in list(dev_base.iterdir()):
                 if not day_dir.is_dir() or day_dir.name in groups:
                     continue
-                old = day_dir / name          # 该柜号在这个日期已没有记录 -> 删掉旧文件
+                old = day_dir / name          # 该 PDA 这个日期已没有记录 -> 删掉旧文件
                 if old.exists():
                     try:
                         old.unlink()
@@ -235,19 +328,34 @@ def rebuild_container_files(conn, container_no: str) -> int:
                 except OSError:
                     pass
         for day, items in groups.items():
-            _write_tsv(base / day / name, items)
+            _write_tsv(dev_base / day / name, items)
             written += 1
     return written
 
 
 def rebuild_all_exports() -> int:
-    """启动时/手动重建全部柜号的 TSV；返回柜号数"""
+    """启动/手动重建全部 PDA 的记录文件；返回 PDA 数量"""
+    _migrate_legacy_layout()
     with closing(db()) as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT COALESCE(container_no, '') AS c FROM scans ORDER BY c").fetchall()
-        for row in rows:
-            rebuild_container_files(conn, row["c"])
-        return len(rows)
+        conn.execute("UPDATE scans SET device_id='PDA-未知' "
+                     "WHERE device_id IS NULL OR TRIM(device_id)=''")
+        devices = {r["d"] for r in conn.execute(
+            "SELECT DISTINCT COALESCE(NULLIF(device_id, ''), 'PDA-未知') AS d FROM scans")}
+        for r in conn.execute("SELECT DISTINCT device_id FROM acks"):
+            if r["device_id"]:
+                devices.add(r["device_id"])
+        for r in conn.execute("SELECT device_id FROM devices"):
+            devices.add(r["device_id"])
+        for d in devices:
+            _ensure_device(conn, d, touch=False)
+        conn.commit()
+        pairs = conn.execute(
+            "SELECT DISTINCT COALESCE(NULLIF(device_id, ''), 'PDA-未知') AS d, "
+            "COALESCE(container_no, '') AS c FROM scans").fetchall()
+        for row in pairs:
+            rebuild_container_files(conn, row["d"], row["c"])
+        conn.commit()
+        return len(devices)
 
 
 # ---------------- app ----------------
@@ -260,7 +368,7 @@ def _startup_rebuild_exports():
     """启动时按数据库重建电脑端 TSV（升级/换电脑后历史记录也有文件）"""
     try:
         n = rebuild_all_exports()
-        print(f"电脑端 TSV 已生成：{n} 个柜号 -> {RECORD_DIR}")
+        print(f"电脑端记录文件已生成：{n} 台 PDA -> {RECORD_DIR}")
     except Exception as exc:          # 文件写失败不影响扫码同步
         print(f"电脑端 TSV 生成失败（不影响同步）：{exc}")
 
@@ -276,9 +384,11 @@ def health():
     with closing(db()) as conn:
         total = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
         rl = conn.execute("SELECT rev FROM rulelib WHERE id = 1").fetchone()
+        devs = conn.execute("SELECT COUNT(*) c FROM devices").fetchone()["c"]
     return {"ok": True, "serverVer": 1, "time": now_iso(),
             "dbPath": str(DB_PATH), "exportDir": str(RECORD_DIR),
             "rulelibRev": rl["rev"] if rl else 0,
+            "devices": devs,
             "pendingScans": total}
 
 
@@ -287,7 +397,7 @@ def rebuild_exports(request: Request):
     """按数据库重建电脑端 TSV（换电脑/手工改过文件后可调用）"""
     check_token(request)
     n = rebuild_all_exports()
-    return {"ok": True, "containers": n, "dir": str(RECORD_DIR)}
+    return {"ok": True, "devices": n, "dir": str(RECORD_DIR)}
 
 
 # ---------- 下行：PDA 拉任务 ----------
@@ -296,9 +406,11 @@ def pull_tasks(request: Request, since: int = 0, limit: int = 200):
     check_token(request)
     limit = max(1, min(limit, 1000))
     with closing(db()) as conn:
+        _ensure_device(conn, request.headers.get("X-Device-Id"), "", _ip_of(request))
         rows = conn.execute(
             "SELECT * FROM tasks WHERE rev > ? ORDER BY rev LIMIT ?", (since, limit + 1)
         ).fetchall()
+        conn.commit()
     has_more = len(rows) > limit
     rows = rows[:limit]
     tasks = [{
@@ -344,6 +456,7 @@ async def push_scans(request: Request):
     check_token(request)
     body = await request.json()
     device = body.get("deviceId") or request.headers.get("X-Device-Id") or "?"
+    app_version = body.get("appVersion") or request.headers.get("X-App-Version") or ""
     scans = body.get("scans") or []
     if len(scans) > 1000:
         raise HTTPException(status_code=413, detail={
@@ -354,6 +467,8 @@ async def push_scans(request: Request):
     affected: set[str] = set()
     ts = now_iso()
     with closing(db()) as conn:
+        dev = _ensure_device(conn, device, app_version, _ip_of(request))
+        device_id = dev["device_id"]
         for s in scans:
             uid = (s.get("uid") or "").strip()
             if not uid:
@@ -366,7 +481,7 @@ async def push_scans(request: Request):
                 "ON CONFLICT(uid) DO UPDATE SET "
                 "deleted_at=excluded.deleted_at, operator_id=excluded.operator_id, "
                 "received_at=excluded.received_at",
-                (uid, device, s.get("containerNo"), s.get("barcode"), s.get("fullCode"),
+                (uid, device_id, s.get("containerNo"), s.get("barcode"), s.get("fullCode"),
                  s.get("result"), s.get("scannedAt"), s.get("operatorId"),
                  s.get("deletedAt"), ts))
             if exists:
@@ -376,15 +491,15 @@ async def push_scans(request: Request):
             affected.add((s.get("containerNo") or "").strip())
         conn.commit()
         total = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
-        # 落盘：每个受影响的柜号重写自己的日期文件（删除/撤回也会同步到回收站）
+        # 落盘：该 PDA 每个受影响的柜号重写自己的日期文件（删除/撤回也会同步到回收站）
         for container_no in affected:
             try:
-                rebuild_container_files(conn, container_no)
+                rebuild_container_files(conn, device_id, container_no)
             except Exception as exc:
-                print(f"TSV 写入失败（{container_no}）：{exc}")
+                print(f"TSV 写入失败（{device_id} / {container_no}）：{exc}")
 
     return {"accepted": accepted, "duplicated": duplicated, "rejected": rejected,
-            "serverRevOut": total, "serverTime": now_iso()}
+            "serverRevOut": total, "serverTime": now_iso(), "deviceId": device_id}
 
 
 # ---------- 游标确认 ----------
@@ -392,13 +507,14 @@ async def push_scans(request: Request):
 async def ack(request: Request):
     check_token(request)
     body = await request.json()
-    device = body.get("deviceId") or "?"
+    device = body.get("deviceId") or request.headers.get("X-Device-Id") or "?"
     with closing(db()) as conn:
+        dev = _ensure_device(conn, device, body.get("appVersion") or "", _ip_of(request))
         conn.execute(
             "INSERT INTO acks(device_id,rev,app_version,at) VALUES(?,?,?,?) "
             "ON CONFLICT(device_id) DO UPDATE SET rev=excluded.rev, "
             "app_version=excluded.app_version, at=excluded.at",
-            (device, int(body.get("rev") or 0), body.get("appVersion"), now_iso()))
+            (dev["device_id"], int(body.get("rev") or 0), body.get("appVersion"), now_iso()))
         conn.commit()
     return {"ok": True, "serverRev": int(body.get("rev") or 0)}
 
@@ -406,21 +522,143 @@ async def ack(request: Request):
 # ---------- 运维：查看已收记录 ----------
 @app.get("/api/v1/scans")
 def list_scans(request: Request, containerNo: str | None = None,
+               deviceId: str | None = None,
                limit: int = 200, includeDeleted: bool = False):
     check_token(request)
     limit = max(1, min(limit, 1000))
-    sql = "SELECT * FROM scans WHERE 1=1"
+    sql = ("SELECT s.*, COALESCE(d.name, s.device_id, '') AS device_name "
+           "FROM scans s LEFT JOIN devices d ON d.device_id = s.device_id WHERE 1=1")
     args: list = []
     if containerNo:
-        sql += " AND container_no = ?"
+        sql += " AND s.container_no = ?"
         args.append(containerNo)
+    if deviceId:
+        sql += " AND s.device_id = ?"
+        args.append(deviceId)
     if not includeDeleted:
-        sql += " AND deleted_at IS NULL"
-    sql += " ORDER BY scanned_at DESC LIMIT ?"
+        sql += " AND s.deleted_at IS NULL"
+    sql += " ORDER BY s.scanned_at DESC LIMIT ?"
     args.append(limit)
     with closing(db()) as conn:
         rows = conn.execute(sql, args).fetchall()
     return {"count": len(rows), "scans": [dict(r) for r in rows]}
+
+
+# ---------- 多 PDA：列表 / 改名 / 下载记录（v1.10.0） ----------
+def _device_dict(row) -> dict:
+    return {
+        "id": row["device_id"],
+        "name": row["name"],
+        "folder": row["folder"],
+        "appVersion": row["app_version"] or "",
+        "lastSeen": row["last_seen"],
+        "lastIp": row["last_ip"] or "",
+        "createdAt": row["created_at"],
+        "scans": row["scans"] if "scans" in row.keys() else 0,
+    }
+
+
+@app.get("/api/v1/devices")
+def list_devices(request: Request):
+    check_token(request)
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT d.*, (SELECT COUNT(*) FROM scans s "
+            " WHERE s.device_id = d.device_id AND s.deleted_at IS NULL) AS scans "
+            "FROM devices d ORDER BY d.name").fetchall()
+    return {"count": len(rows), "devices": [_device_dict(r) for r in rows]}
+
+
+@app.post("/api/v1/devices/{device_id}/name")
+async def rename_device(device_id: str, request: Request):
+    """网页给 PDA 改名；文件夹随名称一起迁移（记录按 PDA 名分目录）"""
+    check_token(request)
+    body = await request.json()
+    new_name = _safe_device_name(body.get("name") or "", "")
+    if not new_name:
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "VALIDATION", "message": "名称不能为空"}})
+    with closing(db()) as conn:
+        row = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail={
+                "error": {"code": "NOT_FOUND", "message": "PDA 不存在"}})
+        if new_name == row["name"] and new_name == row["folder"]:
+            return {"ok": True, "device": _device_dict(row)}
+        dup = conn.execute(
+            "SELECT device_id FROM devices WHERE (name = ? OR folder = ?) AND device_id <> ?",
+            (new_name, new_name, device_id)).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail={
+                "error": {"code": "NAME_TAKEN", "message": f"名称已存在：{new_name}"}})
+
+        old_folder = row["folder"]
+        moved: list[tuple[Path, Path]] = []
+        try:
+            if new_name != old_folder:
+                for base in (RECORD_DIR, TRASH_DIR):
+                    src = base / old_folder
+                    dst = base / new_name
+                    if not src.exists():
+                        if dst.exists():
+                            raise HTTPException(status_code=409, detail={
+                                "error": {"code": "FOLDER_TAKEN",
+                                          "message": f"目录已存在：{new_name}"}})
+                        continue
+                    if dst.exists():
+                        raise HTTPException(status_code=409, detail={
+                            "error": {"code": "FOLDER_TAKEN",
+                                      "message": f"目录已存在：{new_name}"}})
+                    shutil.move(str(src), str(dst))
+                    moved.append((src, dst))
+            conn.execute("UPDATE devices SET name=?, folder=? WHERE device_id=?",
+                         (new_name, new_name, device_id))
+            conn.commit()
+        except HTTPException:
+            for src, dst in reversed(moved):
+                if dst.exists() and not src.exists():
+                    shutil.move(str(dst), str(src))
+            raise
+        except Exception as exc:
+            for src, dst in reversed(moved):
+                if dst.exists() and not src.exists():
+                    shutil.move(str(dst), str(src))
+            raise HTTPException(status_code=500, detail={
+                "error": {"code": "RENAME_FAILED", "message": f"改名失败：{exc}"}})
+        row = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+    return {"ok": True, "device": _device_dict(row)}
+
+
+@app.get("/api/v1/devices/{device_id}/records.zip")
+def download_device_records(device_id: str, request: Request):
+    """下载某台 PDA 的全部记录表格（按 装柜记录/回收站/日期/柜号.tsv 打包）"""
+    _check_token_query(request)
+    with closing(db()) as conn:
+        row = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "NOT_FOUND", "message": "PDA 不存在"}})
+    folder = row["folder"]
+    buf = io.BytesIO()
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for base, label in ((RECORD_DIR, "装柜记录"), (TRASH_DIR, "回收站")):
+            src = base / folder
+            if not src.exists():
+                continue
+            for f in sorted(src.rglob("*.tsv")):
+                z.write(f, f"{folder}/{label}/{f.relative_to(src).as_posix()}")
+                count += 1
+    if count == 0:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "NO_FILES", "message": "该 PDA 还没有记录文件"}})
+    name = f"{folder}_装柜记录_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=pda_records.zip; "
+                                        f"filename*=UTF-8''{quote(name)}"},
+    )
 
 
 # ---------- 规则库：PDA / 电脑网页 上传下载（v1.9.0） ----------
@@ -604,7 +842,11 @@ def _check_token_query(request: Request):
 def get_rulelib(request: Request):
     """PDA 下载规则库（完整快照）；rev=0/hasData=false 表示电脑端还没有"""
     check_token(request)
+    did = request.headers.get("X-Device-Id")
     with closing(db()) as conn:
+        if did:
+            _ensure_device(conn, did, request.headers.get("X-App-Version") or "", _ip_of(request))
+            conn.commit()
         data = _rulelib_row(conn)
     if data is None:
         return {"ok": True, "hasData": False, "rev": 0, "models": [], "rules": [],
@@ -618,6 +860,10 @@ async def put_rulelib(request: Request):
     check_token(request)
     body = await request.json()
     device = body.get("deviceId") or request.headers.get("X-Device-Id") or "?"
+    if device and device != "?":
+        with closing(db()) as conn:
+            _ensure_device(conn, device, request.headers.get("X-App-Version") or "", _ip_of(request))
+            conn.commit()
     return _save_rulelib(body.get("models") or [], body.get("rules") or [], device)
 
 
@@ -694,11 +940,20 @@ def home():
   <img src="/api/v1/pair.png" alt="pair qr">
   <p class="muted">电脑与 PDA 必须在同一 WiFi/局域网；Windows 防火墙需放行 {PORT} 端口（专用网络）。</p>
   <p>电脑端记录文件：<code>{RECORD_DIR}</code><br>
-  <span class="muted">按「日期\\柜号.tsv」自动生成（Excel 可直接打开）；删除的记录在 <code>{TRASH_DIR}</code>。</span></p>
+  <span class="muted">按「PDA 名称\\日期\\柜号.tsv」自动生成（Excel 可直接打开）；删除的记录在 <code>{TRASH_DIR}</code>。</span></p>
 </div>
 <div class="card">
-  <p>最近收到的扫码记录（最多 20 条，不含已删除）</p>
-  <table id="t"><thead><tr><th>时间</th><th>柜号</th><th>条码</th><th>结果</th><th>操作员</th></tr></thead><tbody></tbody></table>
+  <p>PDA 设备（多台）　<button onclick="loadDevices()" style="font-size:13px">刷新设备</button></p>
+  <p class="muted">PDA 首次同步会自动登记，默认名称为设备号；可点「改名」（记录文件夹会一起改名）。
+  每台 PDA 的记录单独存放在 <code>data\\装柜记录\\PDA名称\\日期\\柜号.tsv</code>，互不混合。</p>
+  <table id="dev"><thead><tr><th>PDA 名称</th><th>设备号</th><th>最近同步</th><th>记录数</th><th>操作</th></tr></thead><tbody></tbody></table>
+  <p class="muted">「下载记录 ZIP」会把该 PDA 的装柜记录 + 回收站按日期/柜号打包下载。</p>
+</div>
+<div class="card">
+  <p>最近收到的扫码记录（最多 20 条，不含已删除）
+    　PDA：<select id="devsel" onchange="loadScans()" style="font-size:13px"><option value="">全部 PDA</option></select>
+  </p>
+  <table id="t"><thead><tr><th>时间</th><th>PDA</th><th>柜号</th><th>条码</th><th>结果</th><th>操作员</th></tr></thead><tbody></tbody></table>
   <p class="muted">接口：<a href="/api/v1/health">/api/v1/health</a> ｜ 本页面仅限局域网访问</p>
 </div>
 <div class="card">
@@ -715,17 +970,73 @@ def home():
   每次覆盖前自动备份旧快照到 <code>data/规则库备份/</code>，然后各 PDA 在「WiFi 同步 → 规则库同步」点「下载并覆盖本机规则库」（PDA 也会先自动备份）。</p>
 </div>
 <script>
-fetch('/api/v1/scans?limit=20',{{headers:{{'X-Sync-Token':'{TOKEN}'}}}})
- .then(r=>r.json()).then(d=>{{
-   const b=document.querySelector('#t tbody');
-   d.scans.forEach(s=>{{
-     const tr=document.createElement('tr');
-     [s.scanned_at,s.container_no,s.barcode,s.result,s.operator_id||''].forEach(v=>{{
-       const td=document.createElement('td'); td.textContent=v||''; tr.appendChild(td);
-     }});
-     b.appendChild(tr);
-   }});
- }}).catch(e=>{{}});
+const TOKEN='{TOKEN}';
+async function loadDevices(){{
+  try {{
+    const r=await fetch('/api/v1/devices',{{headers:{{'X-Sync-Token':TOKEN}}}});
+    const d=await r.json();
+    const list=d.devices||[];
+    const tb=document.querySelector('#dev tbody'); tb.innerHTML='';
+    if(!list.length){{
+      const tr=document.createElement('tr');
+      const td=document.createElement('td'); td.colSpan=5; td.textContent='暂无 PDA：PDA 首次同步后会自动出现';
+      tr.appendChild(td); tb.appendChild(tr);
+    }}
+    const sel=document.getElementById('devsel'); const cur=sel.value;
+    sel.innerHTML='<option value="">全部 PDA</option>';
+    list.forEach(x=>{{
+      const o=document.createElement('option'); o.value=x.id; o.textContent=x.name; sel.appendChild(o);
+      const tr=document.createElement('tr');
+      const tdName=document.createElement('td'); tdName.textContent=x.name; tr.appendChild(tdName);
+      const tdId=document.createElement('td'); tdId.innerHTML='<code></code>'; tdId.querySelector('code').textContent=x.id; tr.appendChild(tdId);
+      const tdSeen=document.createElement('td'); tdSeen.textContent=(x.lastSeen||'').replace('T',' ').slice(0,19); tr.appendChild(tdSeen);
+      const tdCount=document.createElement('td'); tdCount.textContent=x.scans||0; tr.appendChild(tdCount);
+      const tdAct=document.createElement('td');
+      const btn=document.createElement('button'); btn.textContent='改名'; btn.style.fontSize='12px';
+      btn.onclick=()=>renameDev(x.id,x.name); tdAct.appendChild(btn);
+      const zip=document.createElement('a'); zip.textContent=' 下载记录 ZIP';
+      zip.href='/api/v1/devices/'+encodeURIComponent(x.id)+'/records.zip?token='+encodeURIComponent(TOKEN);
+      tdAct.appendChild(zip); tr.appendChild(tdAct);
+      tb.appendChild(tr);
+    }});
+    sel.value=cur;
+  }} catch(e) {{}}
+}}
+async function renameDev(id, oldName){{
+  const name=prompt('PDA 名称（记录文件夹会一起改名）', oldName);
+  if(name===null || name.trim()==='' || name.trim()===oldName) return;
+  const r=await fetch('/api/v1/devices/'+encodeURIComponent(id)+'/name',{{
+    method:'POST', headers:{{'X-Sync-Token':TOKEN,'Content-Type':'application/json'}},
+    body:JSON.stringify({{name:name.trim()}})
+  }});
+  const d=await r.json();
+  if(!r.ok){{ alert('改名失败：'+((d.error&&d.error.message)||('HTTP '+r.status))); return; }}
+  await loadDevices(); await loadScans();
+}}
+async function loadScans(){{
+  try {{
+    const dev=document.getElementById('devsel').value;
+    let url='/api/v1/scans?limit=20';
+    if(dev) url+='&deviceId='+encodeURIComponent(dev);
+    const r=await fetch(url,{{headers:{{'X-Sync-Token':TOKEN}}}});
+    const d=await r.json();
+    const b=document.querySelector('#t tbody'); b.innerHTML='';
+    (d.scans||[]).forEach(s=>{{
+      const tr=document.createElement('tr');
+      [s.scanned_at,s.device_name||s.device_id,s.container_no,s.barcode,s.result,s.operator_id||''].forEach(v=>{{
+        const td=document.createElement('td'); td.textContent=v||''; tr.appendChild(td);
+      }});
+      b.appendChild(tr);
+    }});
+    if(!(d.scans||[]).length){{
+      const tr=document.createElement('tr');
+      const td=document.createElement('td'); td.colSpan=6; td.textContent='暂无记录';
+      tr.appendChild(td); b.appendChild(tr);
+    }}
+  }} catch(e) {{}}
+}}
+loadDevices();
+loadScans();
 </script>
 <script>
 async function loadRL(){{
