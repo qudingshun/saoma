@@ -425,6 +425,7 @@ def list_scans(request: Request, containerNo: str | None = None,
 
 # ---------- 规则库：PDA / 电脑网页 上传下载（v1.9.0） ----------
 RULELIB_HEADERS = ["型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略"]
+RULELIB_BACKUP_DIR = DATA / "规则库备份"
 
 
 def _rulelib_row(conn) -> dict | None:
@@ -481,6 +482,18 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
     device = (device or "?")[:64]
     ts = now_iso()
     with closing(db()) as conn:
+        old = _rulelib_row(conn)
+        backup_name = ""
+        if old:
+            RULELIB_BACKUP_DIR.mkdir(exist_ok=True)
+            base = f"规则库_覆盖前_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}"
+            backup_file = RULELIB_BACKUP_DIR / f"{base}.xlsx"
+            n = 2
+            while backup_file.exists():
+                backup_file = RULELIB_BACKUP_DIR / f"{base}_{n}.xlsx"
+                n += 1
+            backup_file.write_bytes(_rulelib_to_xlsx(old["models"], old["rules"]))
+            backup_name = backup_file.name
         row = conn.execute("SELECT rev FROM rulelib WHERE id = 1").fetchone()
         rev = (row["rev"] if row else 0) + 1
         conn.execute(
@@ -492,7 +505,8 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
              json.dumps(rules, ensure_ascii=False), ts, device))
         conn.commit()
     return {"ok": True, "hasData": True, "rev": rev, "models": all_models,
-            "rules": rules, "updatedAt": ts, "updatedBy": device}
+            "rules": rules, "updatedAt": ts, "updatedBy": device,
+            "backup": backup_name}
 
 
 def _xlsx_flag(v, default: bool) -> bool:
@@ -698,7 +712,7 @@ def home():
   </p>
   <p id="rlmsg" class="muted"></p>
   <p class="muted">修改方法：先「下载 Excel」→ 用 Excel/WPS 改型号/前缀/开关 → 「上传覆盖电脑端」；<br>
-  然后各 PDA 在「WiFi 同步 → 规则库同步」点「下载并覆盖本机规则库」（PDA 会先自动备份）。</p>
+  每次覆盖前自动备份旧快照到 <code>data/规则库备份/</code>，然后各 PDA 在「WiFi 同步 → 规则库同步」点「下载并覆盖本机规则库」（PDA 也会先自动备份）。</p>
 </div>
 <script>
 fetch('/api/v1/scans?limit=20',{{headers:{{'X-Sync-Token':'{TOKEN}'}}}})
@@ -736,7 +750,9 @@ async function importRL(){{
       body:f}});
     const d=await r.json();
     if(!r.ok) throw new Error((d.error&&d.error.message)||('HTTP '+r.status));
-    alert('已导入：'+d.models.length+' 个型号 / '+d.rules.length+' 条规则，rev '+d.rev+'。\\n请到 PDA 点「下载并覆盖本机规则库」。');
+    alert('已导入：'+d.models.length+' 个型号 / '+d.rules.length+' 条规则，rev '+d.rev+'。\\n覆盖前备份：'+
+      (d.backup ? ('data/规则库备份/'+d.backup) : '（首次保存，无旧数据）')+
+      '\\n请到 PDA 点「下载并覆盖本机规则库」。');
     msg.textContent='';
     document.getElementById('rlfile').value='';
     loadRL();

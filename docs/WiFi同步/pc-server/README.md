@@ -81,7 +81,8 @@ PDA 的「WiFi 同步 → 规则库同步」：
 电脑网页（推荐在电脑上改）：
 1. 打开 `http://127.0.0.1:8000/`，找到「规则库」卡片。
 2. 点「下载 Excel（当前规则库）」，用 Excel/WPS 修改型号、前缀、四个开关。
-3. 点「上传覆盖电脑端」选择改好的 XLSX；电脑端 `rev+1`。
+3. 点「上传覆盖电脑端」选择改好的 XLSX；电脑端 `rev+1`，旧快照自动备份到
+   `data\规则库备份\规则库_覆盖前_日期时间.xlsx`。
 4. 各 PDA 在 WiFi 同步页点「刷新信息」→「下载并覆盖本机规则库」。
 
 接口：
@@ -90,7 +91,7 @@ PDA 的「WiFi 同步 → 规则库同步」：
 - `GET /api/v1/rulelib.xlsx?token=...`（网页下载 Excel）
 - `POST /api/v1/rulelib/import`（网页上传 Excel，原始字节 + `X-Sync-Token`）
 
-数据：`data\sync.db` 的 `rulelib` 表（单行快照：rev / models_json / rules_json / updated_at / updated_by）。
+数据：`data\sync.db` 的 `rulelib` 表（单行快照：rev / models_json / rules_json / updated_at / updated_by）；每次覆盖前的旧快照另存 `data\规则库备份\规则库_覆盖前_日期时间.xlsx`。
 
 ## 4. 开机自启（可选）
 
