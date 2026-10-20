@@ -13,6 +13,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 ```
 
+> `requirements.txt` 含 `openpyxl`（网页导入/导出规则库 Excel 用）。
+
 3. 启动服务（前台）：
 
 ```powershell
@@ -68,6 +70,28 @@ data\回收站\2026-10-20\柜号.tsv       ← 删除/撤回记录
 - 手动重建接口：`POST /api/v1/rebuild-exports`（带 `X-Sync-Token`）。
 - 交付包内「打开数据文件夹（记录表格）.bat」可直接打开表格目录。
 
+### 3.2 规则库同步（v1.9.0）
+
+PDA 的「WiFi 同步 → 规则库同步」：
+- **上传本机**：把本机规则库整库存到电脑端，`rev+1`。
+- **下载并覆盖本机**：用电脑端规则库整库覆盖本机；覆盖前自动备份为
+  `/sdcard/ZhuangGui/规则库/规则库_同步前备份_日期时间.xlsx`，备份失败会取消。
+- 已装柜的柜子使用各自的规则快照，不受影响。
+
+电脑网页（推荐在电脑上改）：
+1. 打开 `http://127.0.0.1:8000/`，找到「规则库」卡片。
+2. 点「下载 Excel（当前规则库）」，用 Excel/WPS 修改型号、前缀、四个开关。
+3. 点「上传覆盖电脑端」选择改好的 XLSX；电脑端 `rev+1`。
+4. 各 PDA 在 WiFi 同步页点「刷新信息」→「下载并覆盖本机规则库」。
+
+接口：
+- `GET /api/v1/rulelib`（PDA 下载快照）
+- `POST /api/v1/rulelib`（PDA 上传）
+- `GET /api/v1/rulelib.xlsx?token=...`（网页下载 Excel）
+- `POST /api/v1/rulelib/import`（网页上传 Excel，原始字节 + `X-Sync-Token`）
+
+数据：`data\sync.db` 的 `rulelib` 表（单行快照：rev / models_json / rules_json / updated_at / updated_by）。
+
 ## 4. 开机自启（可选）
 
 用「任务计划程序」创建任务：触发器 = 登录时，操作 = 启动
@@ -105,3 +129,4 @@ Web 管理页：`http://127.0.0.1:8000/`（配对二维码、令牌、最近记�
 - EXE 免安装包：双击运行、浏览器自动打开管理页（配对二维码/令牌/最近记录），
   数据存 exe 同目录 `data\`；已在全新目录解压运行验证
 - 电脑端 TSV 落盘：日期/柜号文件、删除进回收站、启动重建（v1.1 实测）
+- 规则库同步：PDA 上传/下载、电脑网页 Excel 下载/导入、rev 递增、下载前备份（v1.9.0 实测）

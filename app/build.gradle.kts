@@ -23,8 +23,8 @@ android {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.8.2"
+        versionCode = 28
+        versionName = "1.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -108,6 +108,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 
     // 迁移测试（androidTest：真机跑 8→9 单步 + 5→9 全链校验）
     androidTestImplementation("androidx.test:runner:1.6.2")

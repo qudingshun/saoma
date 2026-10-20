@@ -2,7 +2,7 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回。
 
-**当前版本：v1.8.2（versionCode 26，数据库 v14）** ｜ 状态：v1.8.2 规则库导出/导入前备份带日期；电脑端同步服务自动生成「日期/柜号.tsv」；WiFi 同步（局域网，未配对不影响扫码）
+**当前版本：v1.9.0（versionCode 28，数据库 v14）** ｜ 状态：v1.9.0 新增**规则库 WiFi 同步**（PDA 上传/下载、电脑网页 Excel 导入导出）；WiFi 同步（局域网，未配对不影响扫码）
 
 ## 操作指南
 
@@ -50,7 +50,8 @@
 
 ## WiFi 同步（v1.8.0，可选）
 
-- 首页新增「WiFi 同步」：配对后，扫码记录自动回传电脑（5 秒合并；后台每 15 分钟补传），断网照常扫码、恢复后补传。
+- WiFi 同步（v1.9.0）：首页新增「WiFi 同步」：配对后，扫码记录自动回传电脑（5 秒合并；后台每 15 分钟补传），断网照常扫码、恢复后补传。
+- **规则库同步（v1.9.0）**：WiFi 同步页新增「规则库同步」——一台 PDA 可「上传本机」把规则库存到电脑；其他 PDA「下载并覆盖本机」（先自动备份为 `规则库_同步前备份_日期.xlsx`，备份失败取消）。电脑网页 `http://电脑IP:8000/` 可直接「下载 Excel → 修改 → 上传覆盖电脑端」，改完各 PDA 下载即可。已装柜的柜子使用各自规则快照，不受影响。
 - 配对：电脑运行同步服务 → 生成配对二维码 → PDA「扫描配对码」；扫码枪不支持二维码时用「手动输入」`电脑IP:8000#令牌`。
 - 同步内容：扫码记录（含正常/串号/重复/超量/辅助、软删除/撤回状态）；uid 幂等，重复上传不翻倍。
 - PC 端源码：`docs/WiFi同步/pc-server/`（FastAPI + SQLite，纯局域网、无云服务）；部署见该目录 README 与 `docs/WiFi同步/03-电脑端实施步骤.md`。
@@ -135,7 +136,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖，38 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 7 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖 + 规则库同步 JSON，41 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 7 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在**仓库外** `E:\saoma-keystore\zhuanggui-release.jks`；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装（需 `run-as` 排障时装 debug）
 - ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份（备份说明随 keystore 目录）；**换签名身份 = 设备需卸载重装**（先快照、装后用快照回灌，见 `子项目计划.md`）——本机 2026-10-19 已完成一次性签名切换（快照 → 卸载 → 装新签名包 → 回灌验证，数据零丢失），此后 debug / release 互装均无需卸载
@@ -203,6 +204,8 @@ app/src/main/java/com/zhuanggui/pda/
 
 ## 版本历史
 
+- **v1.9.0（versionCode 28，DB v14）**：**规则库 WiFi 同步**——PDA「WiFi 同步 → 规则库同步」可「上传本机」（整库存到电脑，rev+1）或「下载并覆盖本机」（整库替换，覆盖前自动备份 `规则库_同步前备份_日期.xlsx`，备份失败取消；已装柜的柜子不受影响）；电脑网页 `http://电脑IP:8000/` 增加规则库卡片：下载 Excel → 修改 → 上传覆盖电脑端（openpyxl 解析，支持型号/前缀/四开关）；电脑端 `sync.db` 新增 `rulelib` 表（rev/models/rules/updated_at/updated_by）；PDA 显示电脑端/本机版本、条数、来源与「有新版本」提示；单测 41 项
+- **v1.8.3（versionCode 27，DB v14）**：规则库导入前核对——选文件后先显示「文件内 N 条、将新增 X 条 / 覆盖 Y 条（列出覆盖前缀）、新增型号数」，点「继续导入」才写入；取消不改规则库、不生成备份；确认后仍先自动备份当前规则库（带日期），备份失败整体取消
 - **v1.8.2（versionCode 26，DB v14）**：规则库文件不覆盖——导出文件名带日期时间（同秒自动 `_2`）；**导入前自动备份**当前规则库（`规则库_导入前备份_日期时间.xlsx`），备份失败则取消导入，避免覆盖后无法回退；电脑端同步服务新增 TSV 落盘：`data\装柜记录\日期\柜号.tsv`（与 PDA 同格式、UTF-8 BOM，Excel 直接打开），删除/撤回记录进 `data\回收站\日期\柜号.tsv`，启动时按数据库重建历史文件
 - **v1.8.1（versionCode 25，DB v14）**：首页修复——「出库扫码」大按钮去掉默认投影、与下一按钮的间距 20→28dp，避免按钮阴影/背景压住「扫码记录查看」边框；电脑端同步服务新增 Web 管理页（配对二维码/令牌/最近记录）与 EXE 打包（见 `docs/WiFi同步/pc-server/`）
 - **v1.8.0（versionCode 24，DB v14）**：可选 WiFi 同步（P0 配对 + P1 扫码记录回传）——首页「WiFi 同步」入口；电脑端同步服务（FastAPI + SQLite，源码 `docs/WiFi同步/pc-server/`，运行目录 `E:\saoma-sync`，纯局域网）；二维码/手输配对（配对时直接校验 token）；扫码后 5 秒合并自动上传、后台 15 分钟补传、断网缓存恢复后补传；软删除/撤回状态同步，`uid` 幂等（重复上传不翻倍）；设置页显示待传条数、服务器时间、上次同步/错误，可测试连接/立即同步/解除配对；未配对或服务不可达完全不影响扫码；DB v13→v14（scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox）；单测 37 项、迁移测试 7 项

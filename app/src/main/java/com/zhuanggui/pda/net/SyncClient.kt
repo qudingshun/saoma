@@ -36,6 +36,11 @@ class SyncClient(baseUrl: String, private val token: String, private val deviceI
 
     fun pushScans(body: String): JSONObject = post("/api/v1/scans", body)
 
+    /** 规则库：GET 电脑端快照 / POST 上传本机快照（v1.9.0） */
+    fun getRuleLibrary(): JSONObject = get("/api/v1/rulelib")
+
+    fun pushRuleLibrary(body: String): JSONObject = post("/api/v1/rulelib", body)
+
     fun ack(rev: Int, appVersion: String): JSONObject = post(
         "/api/v1/ack",
         JSONObject().put("deviceId", deviceId).put("rev", rev).put("appVersion", appVersion).toString()

@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
+import com.zhuanggui.pda.ui.RuleImportPreview
 
 /** 规则源文件类型（解析端按扩展名判断，这里限定选择范围；含导出的 .xlsx） */
 private val RULE_FILE_MIMES = arrayOf(
@@ -63,7 +64,10 @@ fun RulesScreen(
     importing: Boolean,
     exporting: Boolean,
     message: String?,
+    importPreview: RuleImportPreview?,
     onMessageShown: () -> Unit,
+    onConfirmImport: () -> Unit,
+    onCancelImport: () -> Unit,
     onAddModel: (String) -> Unit,
     onRenameModel: (Long, String, String) -> Unit,
     onDeleteModel: (Long, String) -> Unit,
@@ -97,6 +101,36 @@ fun RulesScreen(
             text = { Text(shown) },
             confirmButton = {
                 TextButton(onClick = { localMessage = null; onMessageShown() }) { Text("知道了") }
+            }
+        )
+    }
+
+    // v1.8.3：导入前核对——先看新增/覆盖，再决定是否写入
+    importPreview?.let { p ->
+        AlertDialog(
+            onDismissRequest = onCancelImport,
+            title = { Text("确认导入规则库？") },
+            text = {
+                Text(
+                    buildString {
+                        append("文件内共 ${p.rules.size} 条规则、${p.modelNames.size} 个型号。\n\n")
+                        append("将新增 ${p.newRules} 条，覆盖 ${p.overwriteRules} 条")
+                        if (p.overwriteSamples.isNotEmpty()) {
+                            append("（${p.overwriteSamples.joinToString("、")}")
+                            if (p.overwriteRules > p.overwriteSamples.size) append(" 等")
+                            append("）")
+                        }
+                        append("。")
+                        if (p.newModels > 0) append("\n新增型号 ${p.newModels} 个。")
+                        append("\n\n确认后会先自动备份当前规则库（带日期），再按前缀写入；取消则不改动规则库。")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onConfirmImport) { Text("继续导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = onCancelImport) { Text("取消") }
             }
         )
     }
@@ -215,7 +249,7 @@ fun RulesScreen(
 
             Text(
                 "先建型号，再点型号行「添加规则」逐个添加前缀；导入/导出为 XLSX（型号 / 前缀 / 四个开关）。\n" +
-                    "导出文件名带日期时间；导入前会自动备份当前规则库（带日期），旧文件不会被覆盖。",
+                    "导出文件名带日期时间；导入时先显示新增/覆盖条数，确认后自动备份当前规则库再写入。",
                 fontSize = 11.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 2.dp)
             )

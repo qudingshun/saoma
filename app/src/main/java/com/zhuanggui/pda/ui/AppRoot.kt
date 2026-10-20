@@ -190,13 +190,17 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             val ruleImporting by vm.ruleImporting.collectAsStateWithLifecycle()
             val ruleExporting by vm.ruleExporting.collectAsStateWithLifecycle()
             val ruleLibMessage by vm.ruleLibMessage.collectAsStateWithLifecycle()
+            val ruleImportPreview by vm.ruleImportPreview.collectAsStateWithLifecycle()
             RulesScreen(
                 models = ruleModels,
                 rules = ruleLibrary,
                 importing = ruleImporting,
                 exporting = ruleExporting,
                 message = ruleLibMessage,
+                importPreview = ruleImportPreview,
                 onMessageShown = vm::clearRuleLibMessage,
+                onConfirmImport = vm::confirmRuleImport,
+                onCancelImport = vm::cancelRuleImport,
                 onAddModel = vm::addRuleModel,
                 onRenameModel = vm::renameRuleModel,
                 onDeleteModel = vm::deleteRuleModel,
@@ -225,7 +229,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onSyncNow = vm::syncNow,
                 onUnpair = vm::unpairSync,
                 onClearMessage = vm::clearSyncMessage,
-                onRefresh = vm::refreshSyncState
+                onRefresh = vm::refreshSyncState,
+                onRefreshRuleLib = vm::refreshRuleLibInfo,
+                onUploadRuleLib = vm::uploadRuleLibrary,
+                onDownloadRuleLib = vm::downloadRuleLibrary
             )
         }
     }

@@ -24,6 +24,8 @@ from pathlib import Path
 import qrcode
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, Response
+from openpyxl import Workbook, load_workbook
+from urllib.parse import quote
 
 # ---------------- 配置 ----------------
 # 打包成 exe 后，data 目录放在 exe 旁边（而不是临时解压目录）
@@ -119,6 +121,16 @@ CREATE TABLE IF NOT EXISTS acks (
   rev         INTEGER NOT NULL DEFAULT 0,
   app_version TEXT,
   at          TEXT NOT NULL
+);
+
+-- 规则库快照（v1.9.0）：单行；rev 每次上传 +1，PDA 据此判断是否有新版本
+CREATE TABLE IF NOT EXISTS rulelib (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  rev          INTEGER NOT NULL,
+  models_json  TEXT NOT NULL,
+  rules_json   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  updated_by   TEXT NOT NULL
 );
 """
 
@@ -263,8 +275,10 @@ def check_token(request: Request):
 def health():
     with closing(db()) as conn:
         total = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
+        rl = conn.execute("SELECT rev FROM rulelib WHERE id = 1").fetchone()
     return {"ok": True, "serverVer": 1, "time": now_iso(),
             "dbPath": str(DB_PATH), "exportDir": str(RECORD_DIR),
+            "rulelibRev": rl["rev"] if rl else 0,
             "pendingScans": total}
 
 
@@ -409,6 +423,227 @@ def list_scans(request: Request, containerNo: str | None = None,
     return {"count": len(rows), "scans": [dict(r) for r in rows]}
 
 
+# ---------- 规则库：PDA / 电脑网页 上传下载（v1.9.0） ----------
+RULELIB_HEADERS = ["型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略"]
+
+
+def _rulelib_row(conn) -> dict | None:
+    row = conn.execute("SELECT * FROM rulelib WHERE id = 1").fetchone()
+    if not row:
+        return None
+    return {
+        "rev": row["rev"],
+        "models": json.loads(row["models_json"]),
+        "rules": json.loads(row["rules_json"]),
+        "updatedAt": row["updated_at"],
+        "updatedBy": row["updated_by"],
+    }
+
+
+def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
+    """校验并保存规则库快照（PDA 上传 / 电脑网页导入共用）；rev 每次 +1"""
+    if not isinstance(raw_models, list) or not isinstance(raw_rules, list):
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "VALIDATION", "message": "models / rules 必须是数组"}})
+    if len(raw_rules) > 20000:
+        raise HTTPException(status_code=413, detail={
+            "error": {"code": "TOO_LARGE", "message": "规则最多 20000 条"}})
+
+    models = sorted({str(m or "").strip()[:64] for m in raw_models if str(m or "").strip()})
+    rules: list[dict] = []
+    seen: set[str] = set()
+    for r in raw_rules:
+        if not isinstance(r, dict):
+            continue
+        prefix = str(r.get("prefix") or "").strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]{1,64}", prefix):
+            raise HTTPException(status_code=422, detail={
+                "error": {"code": "VALIDATION", "message": f"前缀无效：{prefix[:32]}"}})
+        if prefix in seen:
+            continue                    # 同前缀只保留第一条（与 PDA 规则库唯一键一致）
+        seen.add(prefix)
+        name = str(r.get("name") or "").strip()[:64]
+        rules.append({
+            "prefix": prefix,
+            "name": name,
+            "allowDuplicate": bool(r.get("allowDuplicate")),
+            "countEnabled": bool(r.get("countEnabled", True)),
+            "checkHistory": bool(r.get("checkHistory")),
+            "ignoreRepeat": bool(r.get("ignoreRepeat")),
+        })
+    if not models and not rules:
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "EMPTY", "message": "规则库为空，未保存（避免误清空）"}})
+
+    # 规则里出现的型号也补进型号列表（空型号仍保留）
+    all_models = sorted(set(models) | {r["name"] for r in rules if r["name"]})
+    rules.sort(key=lambda x: (x["name"], x["prefix"]))
+    device = (device or "?")[:64]
+    ts = now_iso()
+    with closing(db()) as conn:
+        row = conn.execute("SELECT rev FROM rulelib WHERE id = 1").fetchone()
+        rev = (row["rev"] if row else 0) + 1
+        conn.execute(
+            "INSERT INTO rulelib(id,rev,models_json,rules_json,updated_at,updated_by) "
+            "VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET rev=excluded.rev, "
+            "models_json=excluded.models_json, rules_json=excluded.rules_json, "
+            "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (rev, json.dumps(all_models, ensure_ascii=False),
+             json.dumps(rules, ensure_ascii=False), ts, device))
+        conn.commit()
+    return {"ok": True, "hasData": True, "rev": rev, "models": all_models,
+            "rules": rules, "updatedAt": ts, "updatedBy": device}
+
+
+def _xlsx_flag(v, default: bool) -> bool:
+    s = str(v or "").strip().lower()
+    if s in ("1", "是", "true", "y", "yes", "√"):
+        return True
+    if s in ("0", "否", "false", "n", "no", "×", "-"):
+        return False
+    return default
+
+
+def _rulelib_to_xlsx(models: list[str], rules: list[dict]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "规则库"
+    ws.append(RULELIB_HEADERS)
+    by_name: dict[str, list[dict]] = {}
+    for r in rules:
+        by_name.setdefault(r.get("name") or "", []).append(r)
+    names = sorted(set(models) | set(by_name))
+    for name in names:
+        items = sorted(by_name.get(name, []), key=lambda x: x.get("prefix") or "")
+        if not items:
+            ws.append([name, "", "否", "是", "否", "否"])
+        for r in items:
+            ws.append([
+                name, r.get("prefix") or "",
+                "是" if r.get("allowDuplicate") else "否",
+                "是" if r.get("countEnabled", True) else "否",
+                "是" if r.get("checkHistory") else "否",
+                "是" if r.get("ignoreRepeat") else "否",
+            ])
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 18
+    for col in "CDEF":
+        ws.column_dimensions[col].width = 10
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _parse_rulelib_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "BAD_XLSX", "message": f"Excel 无法解析：{exc}"}})
+    ws = wb.worksheets[0] if wb.worksheets else None
+    if ws is None:
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "BAD_XLSX", "message": "Excel 没有工作表"}})
+
+    models: set[str] = set()
+    rules: dict[str, dict] = {}
+    name_first: bool | None = None
+    for row in ws.iter_rows(values_only=True):
+        vals = [("" if v is None else str(v)).strip() for v in (list(row) + [""] * 6)[:6]]
+        if not any(vals):
+            continue
+        c0, c1 = vals[0], vals[1]
+        if name_first is None:
+            # 表头识别：型号在前（PDA 导出）或前缀在前（旧格式）
+            if any(k in c0 for k in ("型号", "名称", "前缀", "条码")) or "前缀" in c1:
+                name_first = any(k in c0 for k in ("型号", "名称")) and "前缀" in c1
+                continue
+            name_first = False
+        name = (c0 if name_first else c1)[:64]
+        prefix = re.sub(r"\s+", "", (c1 if name_first else c0)).upper()
+        if not re.fullmatch(r"[A-Z0-9]{1,64}", prefix):
+            if name:
+                models.add(name)
+            continue
+        if name:
+            models.add(name)
+        rules.setdefault(prefix, {
+            "prefix": prefix,
+            "name": name,
+            "allowDuplicate": _xlsx_flag(vals[2], False),
+            "countEnabled": _xlsx_flag(vals[3], True),
+            "checkHistory": _xlsx_flag(vals[4], False),
+            "ignoreRepeat": _xlsx_flag(vals[5], False),
+        })
+    return sorted(models), list(rules.values())
+
+
+def _check_token_query(request: Request):
+    token = request.query_params.get("token") or request.headers.get("X-Sync-Token")
+    if token != TOKEN:
+        raise HTTPException(status_code=401, detail={
+            "error": {"code": "BAD_TOKEN", "message": "token 不匹配"}})
+
+
+@app.get("/api/v1/rulelib")
+def get_rulelib(request: Request):
+    """PDA 下载规则库（完整快照）；rev=0/hasData=false 表示电脑端还没有"""
+    check_token(request)
+    with closing(db()) as conn:
+        data = _rulelib_row(conn)
+    if data is None:
+        return {"ok": True, "hasData": False, "rev": 0, "models": [], "rules": [],
+                "updatedAt": "", "updatedBy": ""}
+    return {"ok": True, "hasData": True, **data}
+
+
+@app.post("/api/v1/rulelib")
+async def put_rulelib(request: Request):
+    """PDA 上传本机规则库覆盖电脑端快照；每次上传 rev+1（其他 PDA 可看到新版本）"""
+    check_token(request)
+    body = await request.json()
+    device = body.get("deviceId") or request.headers.get("X-Device-Id") or "?"
+    return _save_rulelib(body.get("models") or [], body.get("rules") or [], device)
+
+
+@app.get("/api/v1/rulelib.xlsx")
+def download_rulelib_xlsx(request: Request):
+    """电脑网页下载当前规则库为 XLSX（浏览器用 ?token= 鉴权）"""
+    _check_token_query(request)
+    with closing(db()) as conn:
+        data = _rulelib_row(conn)
+    if data is None:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "NO_DATA", "message": "电脑端暂无规则库"}})
+    blob = _rulelib_to_xlsx(data["models"], data["rules"])
+    name = f"规则库_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=blob,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=rulelib.xlsx; filename*=UTF-8''{quote(name)}"},
+    )
+
+
+@app.post("/api/v1/rulelib/import")
+async def import_rulelib_xlsx(request: Request):
+    """电脑网页上传 XLSX 覆盖电脑端规则库（rev+1；浏览器先下载→Excel 修改→导入）"""
+    check_token(request)
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "EMPTY_FILE", "message": "没有收到文件内容"}})
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={
+            "error": {"code": "TOO_LARGE", "message": "文件最大 20MB"}})
+    models, rules = _parse_rulelib_xlsx(data)
+    if not models and not rules:
+        raise HTTPException(status_code=422, detail={
+            "error": {"code": "EMPTY", "message": "Excel 没有有效规则（第一列=型号，第二列=前缀）"}})
+    device = request.headers.get("X-Device-Id") or "PC-WEB"
+    return _save_rulelib(models, rules, device)
+
+
 @app.get("/api/v1/pair")
 def pair_info():
     return {"payload": pair_payload(), "ip": lan_ip(), "port": PORT, "token": TOKEN, "ver": 1}
@@ -452,6 +687,19 @@ def home():
   <table id="t"><thead><tr><th>时间</th><th>柜号</th><th>条码</th><th>结果</th><th>操作员</th></tr></thead><tbody></tbody></table>
   <p class="muted">接口：<a href="/api/v1/health">/api/v1/health</a> ｜ 本页面仅限局域网访问</p>
 </div>
+<div class="card">
+  <p>规则库（PDA 上传 / 下载）</p>
+  <p id="rl">加载中…</p>
+  <p>
+    <a href="/api/v1/rulelib.xlsx?token={TOKEN}">下载 Excel（当前规则库）</a>
+    ｜ 导入 Excel：
+    <input type="file" id="rlfile" accept=".xlsx" style="font-size:13px">
+    <button onclick="importRL()" style="font-size:13px">上传覆盖电脑端</button>
+  </p>
+  <p id="rlmsg" class="muted"></p>
+  <p class="muted">修改方法：先「下载 Excel」→ 用 Excel/WPS 改型号/前缀/开关 → 「上传覆盖电脑端」；<br>
+  然后各 PDA 在「WiFi 同步 → 规则库同步」点「下载并覆盖本机规则库」（PDA 会先自动备份）。</p>
+</div>
 <script>
 fetch('/api/v1/scans?limit=20',{{headers:{{'X-Sync-Token':'{TOKEN}'}}}})
  .then(r=>r.json()).then(d=>{{
@@ -464,6 +712,37 @@ fetch('/api/v1/scans?limit=20',{{headers:{{'X-Sync-Token':'{TOKEN}'}}}})
      b.appendChild(tr);
    }});
  }}).catch(e=>{{}});
+</script>
+<script>
+async function loadRL(){{
+  try {{
+    const r=await fetch('/api/v1/rulelib',{{headers:{{'X-Sync-Token':'{TOKEN}'}}}});
+    const d=await r.json();
+    const el=document.getElementById('rl');
+    if(!d.hasData){{ el.textContent='电脑端暂无规则库：请在一台 PDA 的「WiFi 同步」页点「上传本机规则库」，或在下面导入 Excel。'; return; }}
+    el.innerHTML='<b>'+d.models.length+'</b> 个型号 / <b>'+d.rules.length+'</b> 条规则，rev '+d.rev+
+      '<br><span class="muted">更新：'+(d.updatedAt||'')+' ｜ 来源：'+(d.updatedBy||'')+'</span>';
+  }} catch(e) {{}}
+}}
+async function importRL(){{
+  const f=document.getElementById('rlfile').files[0];
+  const msg=document.getElementById('rlmsg');
+  if(!f){{ alert('请先选择 .xlsx 文件'); return; }}
+  if(!confirm('将用「'+f.name+'」覆盖电脑端规则库（rev+1），继续？')) return;
+  msg.textContent='上传中…';
+  try {{
+    const r=await fetch('/api/v1/rulelib/import',{{method:'POST',
+      headers:{{'X-Sync-Token':'{TOKEN}','X-Device-Id':'PC-WEB','Content-Type':'application/octet-stream'}},
+      body:f}});
+    const d=await r.json();
+    if(!r.ok) throw new Error((d.error&&d.error.message)||('HTTP '+r.status));
+    alert('已导入：'+d.models.length+' 个型号 / '+d.rules.length+' 条规则，rev '+d.rev+'。\\n请到 PDA 点「下载并覆盖本机规则库」。');
+    msg.textContent='';
+    document.getElementById('rlfile').value='';
+    loadRL();
+  }} catch(e) {{ msg.textContent='导入失败：'+e.message; }}
+}}
+loadRL();
 </script>
 </body></html>"""
 

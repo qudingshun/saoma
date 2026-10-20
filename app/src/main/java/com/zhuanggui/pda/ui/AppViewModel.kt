@@ -16,6 +16,7 @@ import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
+import com.zhuanggui.pda.data.entity.SyncState
 import com.zhuanggui.pda.export.FileExporter
 import com.zhuanggui.pda.export.RuleExporter
 import com.zhuanggui.pda.importer.RuleSourceImporter
@@ -79,7 +80,19 @@ data class SyncUiState(
     val serverTime: String = "",
     val pairing: Boolean = false,
     val busy: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    // 规则库同步（v1.9.0）
+    val ruleLibHasData: Boolean = false,
+    val ruleLibServerRev: Int = 0,
+    val ruleLibLocalRev: Int = 0,
+    val ruleLibServerModels: Int = 0,
+    val ruleLibServerRules: Int = 0,
+    val ruleLibUpdatedAt: String = "",
+    val ruleLibUpdatedBy: String = "",
+    val ruleLibLocalModels: Int = 0,
+    val ruleLibLocalRules: Int = 0,
+    val ruleLibBusy: Boolean = false,
+    val ruleLibError: String = ""
 )
 
 /** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」；v1.7.0：计划随柜回显） */
@@ -133,6 +146,19 @@ data class UndoRedoState(
 private data class RecordOp(val kind: Kind, val ids: List<Long>) {
     enum class Kind { INSERT, DELETE }
 }
+
+/**
+ * 规则库导入预览（v1.8.3）：解析完先让用户核对「新增 / 覆盖」再决定是否写入。
+ * 备份仍在确认后、写库前执行；取消导入不会改规则库、也不会生成备份。
+ */
+data class RuleImportPreview(
+    val rules: List<RuleSourceImporter.ParsedRule>,
+    val modelNames: List<String>,
+    val newRules: Int,
+    val overwriteRules: Int,
+    val newModels: Int,
+    val overwriteSamples: List<String>
+)
 
 /**
  * 全局状态机（出库扫码 + 扫码记录 + 规则库）。
@@ -232,6 +258,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _ruleImporting = MutableStateFlow(false)
     val ruleImporting: StateFlow<Boolean> = _ruleImporting.asStateFlow()
 
+    /** 导入解析完成后的待确认预览；null = 没有待确认导入 */
+    private val _ruleImportPreview = MutableStateFlow<RuleImportPreview?>(null)
+    val ruleImportPreview: StateFlow<RuleImportPreview?> = _ruleImportPreview.asStateFlow()
+
     private val _ruleExporting = MutableStateFlow(false)
     val ruleExporting: StateFlow<Boolean> = _ruleExporting.asStateFlow()
 
@@ -286,13 +316,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 读 sync_state → 界面状态（未配对也可看 deviceId 与上次错误） */
     fun refreshSyncState() {
         viewModelScope.launch {
-            val url = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_SERVER_URL).orEmpty()
-            val token = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_TOKEN).orEmpty()
+            val url = syncStateDao.get(SyncState.K_SERVER_URL).orEmpty()
+            val token = syncStateDao.get(SyncState.K_TOKEN).orEmpty()
             val device = syncRepository.ensureDeviceId()
-            val last = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_LAST_SYNC_AT)
+            val last = syncStateDao.get(SyncState.K_LAST_SYNC_AT)
                 ?.toLongOrNull() ?: 0L
-            val err = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_LAST_ERROR).orEmpty()
-            val st = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_SERVER_TIME).orEmpty()
+            val err = syncStateDao.get(SyncState.K_LAST_ERROR).orEmpty()
+            val st = syncStateDao.get(SyncState.K_SERVER_TIME).orEmpty()
+            val rlSynced = syncStateDao.get(SyncState.K_RULELIB_SYNCED_REV)?.toIntOrNull() ?: 0
+            val rlServer = syncStateDao.get(SyncState.K_RULELIB_SERVER_REV)?.toIntOrNull() ?: 0
+            val rlAt = syncStateDao.get(SyncState.K_RULELIB_UPDATED_AT).orEmpty()
+            val rlBy = syncStateDao.get(SyncState.K_RULELIB_UPDATED_BY).orEmpty()
+            val localModelCount = ruleModelDao.getAll().size
+            val localRuleCount = ruleLibDao.getAll().size
             _syncUi.update {
                 it.copy(
                     paired = url.isNotBlank() && token.isNotBlank(),
@@ -300,7 +336,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     deviceId = device,
                     lastSyncAt = last,
                     lastError = err,
-                    serverTime = st
+                    serverTime = st,
+                    ruleLibServerRev = rlServer,
+                    ruleLibLocalRev = rlSynced,
+                    ruleLibUpdatedAt = rlAt,
+                    ruleLibUpdatedBy = rlBy,
+                    ruleLibLocalModels = localModelCount,
+                    ruleLibLocalRules = localRuleCount
                 )
             }
         }
@@ -338,6 +380,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     refreshSyncState()
                     SyncScheduler.syncNow(app)
+                    refreshRuleLibInfo()
                 }
                 .onFailure { e ->
                     Log.w("SyncPair", "配对失败", e)
@@ -402,8 +445,131 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun unpairSync() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { syncRepository.unpair() }
-            _syncUi.update { it.copy(paired = false, baseUrl = "", serverTime = "", message = "已解除配对") }
+            _syncUi.update {
+                it.copy(
+                    paired = false, baseUrl = "", serverTime = "",
+                    ruleLibHasData = false, ruleLibServerRev = 0, ruleLibLocalRev = 0,
+                    ruleLibServerModels = 0, ruleLibServerRules = 0,
+                    ruleLibUpdatedAt = "", ruleLibUpdatedBy = "", ruleLibError = "",
+                    message = "已解除配对"
+                )
+            }
             refreshSyncState()
+        }
+    }
+
+    // ---------- 规则库同步（v1.9.0） ----------
+
+    /** 查电脑端规则库版本/条数（只读） */
+    fun refreshRuleLibInfo() {
+        if (!_syncUi.value.paired) return
+        viewModelScope.launch {
+            _syncUi.update { it.copy(ruleLibBusy = true, ruleLibError = "") }
+            runCatching { withContext(Dispatchers.IO) { syncRepository.fetchRuleLibrary() } }
+                .onSuccess { snap ->
+                    val localRev = syncStateDao.get(SyncState.K_RULELIB_SYNCED_REV)?.toIntOrNull() ?: 0
+                    val localModels = ruleModelDao.getAll().size
+                    val localRules = ruleLibDao.getAll().size
+                    _syncUi.update {
+                        it.copy(
+                            ruleLibBusy = false,
+                            ruleLibHasData = snap.hasData,
+                            ruleLibServerRev = snap.rev,
+                            ruleLibLocalRev = localRev,
+                            ruleLibServerModels = snap.models.size,
+                            ruleLibServerRules = snap.rules.size,
+                            ruleLibUpdatedAt = snap.updatedAt,
+                            ruleLibUpdatedBy = snap.updatedBy,
+                            ruleLibLocalModels = localModels,
+                            ruleLibLocalRules = localRules,
+                            ruleLibError = ""
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _syncUi.update {
+                        it.copy(
+                            ruleLibBusy = false,
+                            ruleLibError = "读取电脑端规则库失败：${e.message ?: "网络不通"}"
+                        )
+                    }
+                }
+        }
+    }
+
+    /** 上传本机规则库 → 电脑端（整库替换；其他 PDA 可下载） */
+    fun uploadRuleLibrary() {
+        viewModelScope.launch {
+            _syncUi.update { it.copy(ruleLibBusy = true, ruleLibError = "") }
+            runCatching { withContext(Dispatchers.IO) { syncRepository.uploadRuleLibrary() } }
+                .onSuccess { snap ->
+                    val localModels = ruleModelDao.getAll().size
+                    val localRules = ruleLibDao.getAll().size
+                    _syncUi.update {
+                        it.copy(
+                            ruleLibBusy = false,
+                            ruleLibHasData = true,
+                            ruleLibServerRev = snap.rev,
+                            ruleLibLocalRev = snap.rev,
+                            ruleLibServerModels = snap.models.size,
+                            ruleLibServerRules = snap.rules.size,
+                            ruleLibUpdatedAt = snap.updatedAt,
+                            ruleLibUpdatedBy = snap.updatedBy,
+                            ruleLibLocalModels = localModels,
+                            ruleLibLocalRules = localRules,
+                            message = "已上传规则库到电脑：rev ${snap.rev}，" +
+                                "${snap.models.size} 个型号 / ${snap.rules.size} 条规则\n\n" +
+                                "其他 PDA 可在「WiFi 同步 → 规则库同步」点「下载并覆盖本机规则库」。"
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _syncUi.update {
+                        it.copy(ruleLibBusy = false, message = "上传规则库失败：${e.message ?: "网络不通"}")
+                    }
+                }
+        }
+    }
+
+    /** 下载电脑端规则库 → 整库覆盖本机（先自动备份；已装柜的柜子不受影响） */
+    fun downloadRuleLibrary() {
+        viewModelScope.launch {
+            _syncUi.update { it.copy(ruleLibBusy = true, ruleLibError = "") }
+            runCatching { withContext(Dispatchers.IO) { syncRepository.downloadRuleLibrary() } }
+                .onSuccess { r ->
+                    val msg = buildString {
+                        append("已下载规则库 rev ${r.snapshot.rev}：")
+                        append("${r.modelCount} 个型号 / ${r.ruleCount} 条规则")
+                        if (r.backup != null) {
+                            append("\n\n覆盖前已备份本机规则库：\n")
+                            append("${RuleExporter.displayDir()}/${r.backup.name}")
+                        }
+                        append("\n\n已装柜的柜子不受影响（使用各自的规则快照）。")
+                    }
+                    _syncUi.update {
+                        it.copy(
+                            ruleLibBusy = false,
+                            ruleLibHasData = true,
+                            ruleLibServerRev = r.snapshot.rev,
+                            ruleLibLocalRev = r.snapshot.rev,
+                            ruleLibServerModels = r.modelCount,
+                            ruleLibServerRules = r.ruleCount,
+                            ruleLibUpdatedAt = r.snapshot.updatedAt,
+                            ruleLibUpdatedBy = r.snapshot.updatedBy,
+                            ruleLibLocalModels = r.modelCount,
+                            ruleLibLocalRules = r.ruleCount,
+                            message = msg
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _syncUi.update {
+                        it.copy(
+                            ruleLibBusy = false,
+                            message = "下载规则库失败（本机规则库未修改）：${e.message ?: "网络不通"}"
+                        )
+                    }
+                }
         }
     }
 
@@ -1267,64 +1433,96 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 规则源导入：解析 .xlsx/.xls/.csv/.txt（第一列=前缀，第二列可选=名称，第 3~6 列可选=四个开关），
-     * 全部写入规则库；前缀冲突则覆盖。源文件不带开关列时保留库内原开关（只更新名称）。
-     * v1.8.2：覆盖前自动导出当前规则库做日期备份；备份失败则取消导入。
-     * 结果通过 [ruleLibMessage] 提示。
+     * 规则源导入（v1.8.3）：解析 .xlsx/.xls/.csv/.txt，先生成「新增 / 覆盖」预览，
+     * 用户在弹窗里核对并确认后才写入；取消不改规则库、不生成备份。
+     * 备份在确认后、写库前执行（失败则整体取消）；结果通过 [ruleLibMessage] 提示。
      */
     fun importRuleSource(context: Context, uri: Uri) {
         viewModelScope.launch {
             _ruleImporting.value = true
-            val result = runCatching {
+            try {
                 val parsed = withContext(Dispatchers.IO) { RuleSourceImporter.parse(context, uri) }
                 if (parsed.isEmpty()) {
-                    "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称，" +
+                    _ruleLibMessage.value = "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称，" +
                         "第 3~6 列可选=可重复扫/计入统计/查历史串号/忽略（1/0）"
-                } else {
-                    val ruleRows = parsed.filter { it.prefix.isNotBlank() }
-                    val modelNames = parsed.map { it.name.trim() }.filter { it.isNotBlank() }.distinct()
-                    // v1.8.2：覆盖导入前先按日期备份当前规则库；备份失败则不导入，避免旧内容丢失
-                    val oldModels = ruleModelDao.getAll()
-                    val oldRules = ruleLibDao.getAll()
-                    val backup = withContext(Dispatchers.IO) {
-                        RuleExporter.backupBeforeImport(oldModels, oldRules)
-                    }
-                    var added = 0
-                    var updated = 0
-                    app.database.withTransaction {
-                        modelNames.forEach { ruleModelDao.insert(RuleModel(name = it)) }
-                        val existing = oldRules.associateBy { it.prefix }
-                        ruleRows.forEach { p ->
-                            val old = existing[p.prefix]
-                            if (old != null) updated++ else added++
-                            // 导出的 XLSX 带开关 → 以文件为准；普通两列文件 → 保留库内原开关
-                            val keep = p.hasFlags || old == null
-                            ruleLibDao.upsert(
-                                RuleLibEntry(
-                                    prefix = p.prefix,
-                                    name = p.name,
-                                    allowDuplicate = if (keep) p.allowDuplicate else old.allowDuplicate,
-                                    countEnabled = if (keep) p.countEnabled else old.countEnabled,
-                                    checkHistory = if (keep) p.checkHistory else old.checkHistory,
-                                    ignoreRepeat = if (keep) p.ignoreRepeat else old.ignoreRepeat,
-                                    updatedAt = Date()
-                                )
+                    return@launch
+                }
+                val ruleRows = parsed.filter { it.prefix.isNotBlank() }
+                val modelNames = parsed.map { it.name.trim() }.filter { it.isNotBlank() }.distinct()
+                val oldModels = ruleModelDao.getAll()
+                val oldRules = ruleLibDao.getAll()
+                val existing = oldRules.associateBy { it.prefix }
+                val overwrite = ruleRows.filter { it.prefix in existing }
+                val existingNames = (oldModels.map { it.name } + oldRules.map { it.name }).toSet()
+                _ruleImportPreview.value = RuleImportPreview(
+                    rules = ruleRows,
+                    modelNames = modelNames,
+                    newRules = ruleRows.size - overwrite.size,
+                    overwriteRules = overwrite.size,
+                    newModels = modelNames.count { it !in existingNames },
+                    overwriteSamples = overwrite.map { it.prefix }.take(12)
+                )
+            } catch (e: Exception) {
+                _ruleLibMessage.value = "导入失败（规则库未修改）：${e.message ?: "文件无法解析"}"
+            } finally {
+                _ruleImporting.value = false
+            }
+        }
+    }
+
+    /** 确认导入（v1.8.3）：先按日期备份旧规则库，再写入；备份失败则整体取消 */
+    fun confirmRuleImport() {
+        val preview = _ruleImportPreview.value ?: return
+        _ruleImportPreview.value = null
+        viewModelScope.launch {
+            _ruleImporting.value = true
+            val result = runCatching {
+                val oldModels = ruleModelDao.getAll()
+                val oldRules = ruleLibDao.getAll()
+                // 覆盖导入前先按日期备份当前规则库；备份失败则不导入，避免旧内容丢失
+                val backup = withContext(Dispatchers.IO) {
+                    RuleExporter.backupBeforeImport(oldModels, oldRules)
+                }
+                var added = 0
+                var updated = 0
+                app.database.withTransaction {
+                    preview.modelNames.forEach { ruleModelDao.insert(RuleModel(name = it)) }
+                    val existing = oldRules.associateBy { it.prefix }
+                    preview.rules.forEach { p ->
+                        val old = existing[p.prefix]
+                        if (old != null) updated++ else added++
+                        // 导出的 XLSX 带开关 → 以文件为准；普通两列文件 → 保留库内原开关
+                        val keep = p.hasFlags || old == null
+                        ruleLibDao.upsert(
+                            RuleLibEntry(
+                                prefix = p.prefix,
+                                name = p.name,
+                                allowDuplicate = if (keep) p.allowDuplicate else old.allowDuplicate,
+                                countEnabled = if (keep) p.countEnabled else old.countEnabled,
+                                checkHistory = if (keep) p.checkHistory else old.checkHistory,
+                                ignoreRepeat = if (keep) p.ignoreRepeat else old.ignoreRepeat,
+                                updatedAt = Date()
                             )
-                        }
-                    }
-                    buildString {
-                        append("导入完成：新增 $added 条，覆盖 $updated 条，共 ${ruleRows.size} 条")
-                        if (modelNames.isNotEmpty()) append("；型号 ${modelNames.size} 个")
-                        if (backup != null) {
-                            append("\n\n导入前已备份（含日期，不覆盖旧文件）：\n")
-                            append("${RuleExporter.displayDir()}/${backup.name}")
-                        }
+                        )
                     }
                 }
-            }.getOrElse { "导入失败（规则库未修改）：${it.message ?: "文件无法解析"}" }
+                buildString {
+                    append("导入完成：新增 $added 条，覆盖 $updated 条，共 ${preview.rules.size} 条")
+                    if (preview.modelNames.isNotEmpty()) append("；型号 ${preview.modelNames.size} 个")
+                    if (backup != null) {
+                        append("\n\n导入前已备份（含日期，不覆盖旧文件）：\n")
+                        append("${RuleExporter.displayDir()}/${backup.name}")
+                    }
+                }
+            }.getOrElse { "导入失败（规则库未修改）：${it.message ?: "无法写入规则库"}" }
             _ruleImporting.value = false
             _ruleLibMessage.value = result
         }
+    }
+
+    /** 取消待确认的规则导入 */
+    fun cancelRuleImport() {
+        _ruleImportPreview.value = null
     }
 
     /**

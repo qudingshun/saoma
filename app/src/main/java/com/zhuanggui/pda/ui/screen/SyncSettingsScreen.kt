@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -52,12 +54,21 @@ fun SyncSettingsScreen(
     onSyncNow: () -> Unit,
     onUnpair: () -> Unit,
     onClearMessage: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onRefreshRuleLib: () -> Unit,
+    onUploadRuleLib: () -> Unit,
+    onDownloadRuleLib: () -> Unit
 ) {
     var manualDialog by remember { mutableStateOf(false) }
+    var confirmUpload by remember { mutableStateOf(false) }
+    var confirmDownload by remember { mutableStateOf(false) }
 
     // 待传条数变化（自动同步完成 / 新扫码）时刷新「上次同步/错误」等状态
     androidx.compose.runtime.LaunchedEffect(pending) { onRefresh() }
+    // 进入页面/配对成功后，自动查一次电脑端规则库版本（只读）
+    androidx.compose.runtime.LaunchedEffect(state.paired) {
+        if (state.paired) onRefreshRuleLib()
+    }
 
     state.message?.let { msg ->
         AlertDialog(
@@ -100,11 +111,50 @@ fun SyncSettingsScreen(
         )
     }
 
+    if (confirmUpload) {
+        AlertDialog(
+            onDismissRequest = { confirmUpload = false },
+            title = { Text("上传本机规则库？") },
+            text = {
+                Text(
+                    "将用本机规则库（${state.ruleLibLocalModels} 个型号 / ${state.ruleLibLocalRules} 条规则）" +
+                        "覆盖电脑端当前版本，电脑端 rev 会 +1。\n\n" +
+                        "其他 PDA 之后「下载并覆盖本机」时会拿到这份规则。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmUpload = false; onUploadRuleLib() }) { Text("上传覆盖") }
+            },
+            dismissButton = { TextButton(onClick = { confirmUpload = false }) { Text("取消") } }
+        )
+    }
+
+    if (confirmDownload) {
+        AlertDialog(
+            onDismissRequest = { confirmDownload = false },
+            title = { Text("下载并覆盖本机规则库？") },
+            text = {
+                Text(
+                    "将用电脑端 rev ${state.ruleLibServerRev}（${state.ruleLibServerModels} 个型号 / " +
+                        "${state.ruleLibServerRules} 条规则）覆盖本机规则库。\n\n" +
+                        "本机现有 ${state.ruleLibLocalModels} 个型号 / ${state.ruleLibLocalRules} 条规则，" +
+                        "覆盖前会自动备份为 XLSX（带日期）；备份失败会取消下载。\n\n" +
+                        "已装柜的柜子使用各自规则快照，不受影响。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmDownload = false; onDownloadRuleLib() }) { Text("覆盖本机") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDownload = false }) { Text("取消") } }
+        )
+    }
+
     Scaffold { pad ->
         Column(
             Modifier
                 .padding(pad)
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -194,6 +244,77 @@ fun SyncSettingsScreen(
                     contentPadding = PaddingValues(horizontal = 8.dp),
                     modifier = Modifier.weight(1f).height(44.dp)
                 ) { Text("立即同步", fontSize = 13.sp) }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 2.dp))
+            Text("规则库同步", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("电脑端规则库", fontSize = 13.sp, color = Color.Gray)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (state.ruleLibHasData)
+                                "${state.ruleLibServerModels} 型号 / ${state.ruleLibServerRules} 条"
+                            else "暂无",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = if (state.ruleLibHasData) Color(0xFF2E7D32) else Color(0xFFF57F17)
+                        )
+                    }
+                    InfoLine("版本", if (state.ruleLibServerRev > 0) "rev ${state.ruleLibServerRev}" else "—")
+                    InfoLine("更新时间", state.ruleLibUpdatedAt.ifBlank { "—" })
+                    InfoLine("来源设备", state.ruleLibUpdatedBy.ifBlank { "—" })
+                    InfoLine(
+                        "本机规则库",
+                        "${state.ruleLibLocalModels} 型号 / ${state.ruleLibLocalRules} 条"
+                    )
+                    if (state.ruleLibLocalRev > 0) {
+                        val hint = when {
+                            state.ruleLibServerRev > state.ruleLibLocalRev -> "（电脑端有新版本）"
+                            state.ruleLibServerRev == state.ruleLibLocalRev -> "（已最新）"
+                            else -> ""
+                        }
+                        InfoLine("本机已同步", "rev ${state.ruleLibLocalRev}$hint")
+                    }
+                    if (state.ruleLibError.isNotBlank()) {
+                        Text(
+                            state.ruleLibError,
+                            fontSize = 11.sp, color = Color(0xFFD32F2F),
+                            modifier = Modifier.padding(top = 3.dp)
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onRefreshRuleLib,
+                            enabled = state.paired && !state.busy && !state.ruleLibBusy,
+                            contentPadding = PaddingValues(horizontal = 6.dp),
+                            modifier = Modifier.weight(1f).height(40.dp)
+                        ) { Text(if (state.ruleLibBusy) "读取中…" else "刷新信息", fontSize = 12.sp) }
+                        OutlinedButton(
+                            onClick = { confirmUpload = true },
+                            enabled = state.paired && !state.busy && !state.ruleLibBusy &&
+                                state.ruleLibLocalRules > 0,
+                            contentPadding = PaddingValues(horizontal = 6.dp),
+                            modifier = Modifier.weight(1f).height(40.dp)
+                        ) { Text("上传本机", fontSize = 12.sp) }
+                    }
+                    Button(
+                        onClick = { confirmDownload = true },
+                        enabled = state.paired && !state.busy && !state.ruleLibBusy && state.ruleLibHasData,
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp).padding(top = 4.dp)
+                    ) { Text("下载并覆盖本机规则库", fontSize = 13.sp) }
+                    Text(
+                        "上传 = 用本机规则库覆盖电脑端；下载 = 用电脑端覆盖本机（先自动备份 XLSX）。" +
+                            "已装柜的柜子使用各自规则快照，不受影响。",
+                        fontSize = 10.sp, color = Color.Gray,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
 
             if (state.paired) {

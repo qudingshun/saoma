@@ -56,11 +56,21 @@ object RuleExporter {
      * 规则库_导入前备份_yyyyMMdd_HHmmss.xlsx，供核对/回退。
      * 返回 null = 当前规则库为空，无需备份。
      */
-    fun backupBeforeImport(models: List<RuleModel>, rules: List<RuleLibEntry>): File? {
+    fun backupBeforeImport(models: List<RuleModel>, rules: List<RuleLibEntry>): File? =
+        backup(models, rules, "规则库_导入前备份")
+
+    /**
+     * WiFi 规则库下载前备份（v1.9.0）：整库覆盖前先留一份本机快照，可随时导入恢复。
+     * 返回 null = 本机规则库为空。
+     */
+    fun backupBeforeSync(models: List<RuleModel>, rules: List<RuleLibEntry>): File? =
+        backup(models, rules, "规则库_同步前备份")
+
+    private fun backup(models: List<RuleModel>, rules: List<RuleLibEntry>, prefix: String): File? {
         if (models.isEmpty() && rules.isEmpty()) return null
         val dir = File(android.os.Environment.getExternalStorageDirectory(), DIR)
         dir.mkdirs()
-        val file = uniqueFile(dir, "规则库_导入前备份_${timeFormat.format(LocalDateTime.now())}")
+        val file = uniqueFile(dir, "${prefix}_${timeFormat.format(LocalDateTime.now())}")
         exportTo(file, models, rules)
         return file
     }

@@ -19,6 +19,11 @@ data class SyncState(
         const val K_LAST_SYNC_AT = "lastSyncAt"    // 上次成功同步时间（epoch ms）
         const val K_LAST_ERROR = "lastError"       // 上次失败原因（界面展示）
         const val K_SERVER_TIME = "serverTime"     // health 返回的服务端时间（界面展示）
+        // 规则库同步（v1.9.0）
+        const val K_RULELIB_SYNCED_REV = "rulelibSyncedRev"   // 本机已下载/上传的 rev
+        const val K_RULELIB_SERVER_REV = "rulelibServerRev"   // 最近一次查到的电脑端 rev
+        const val K_RULELIB_UPDATED_AT = "rulelibUpdatedAt"   // 电脑端快照更新时间
+        const val K_RULELIB_UPDATED_BY = "rulelibUpdatedBy"   // 电脑端快照来源设备
     }
 }
 

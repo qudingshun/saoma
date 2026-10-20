@@ -206,6 +206,10 @@ interface RuleLibDao {
     /** 删除型号：删除其下全部规则（v13） */
     @Query("DELETE FROM rule_library WHERE name = :name")
     suspend fun deleteByModelName(name: String)
+
+    /** 规则库同步（v1.9.0）：整库覆盖前清空 */
+    @Query("DELETE FROM rule_library")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -227,4 +231,8 @@ interface RuleModelDao {
 
     @Query("DELETE FROM rule_models WHERE id = :id")
     suspend fun delete(id: Long)
+
+    /** 规则库同步（v1.9.0）：整库覆盖前清空 */
+    @Query("DELETE FROM rule_models")
+    suspend fun deleteAll()
 }

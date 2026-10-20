@@ -2,14 +2,19 @@ package com.zhuanggui.pda.net
 
 import android.content.Context
 import android.provider.Settings
+import androidx.room.withTransaction
 import com.zhuanggui.pda.data.AppDatabase
+import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.data.entity.SyncInbox
 import com.zhuanggui.pda.data.entity.SyncState
+import com.zhuanggui.pda.export.RuleExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Date
 import java.util.UUID
 
@@ -33,9 +38,19 @@ class SyncRepository(
         data object NotPaired : Result()
     }
 
+    /** 规则库下载结果：snapshot = 电脑端版本；backup = 覆盖前的本机备份（空库时 null） */
+    data class RuleLibDownloadResult(
+        val snapshot: RuleLibSnapshot,
+        val backup: File?,
+        val modelCount: Int,
+        val ruleCount: Int
+    )
+
     private val stateDao get() = db.syncStateDao()
     private val recordDao get() = db.scanRecordDao()
     private val inboxDao get() = db.syncInboxDao()
+    private val ruleLibDao get() = db.ruleLibDao()
+    private val ruleModelDao get() = db.ruleModelDao()
 
     fun observePendingCount(): Flow<Int> = recordDao.observePendingCount()
 
@@ -79,6 +94,11 @@ class SyncRepository(
         stateDao.delete(SyncState.K_LAST_SYNC_AT)
         stateDao.put(SyncState(SyncState.K_LAST_ERROR, ""))
         stateDao.put(SyncState(SyncState.K_SERVER_TIME, ""))
+        // 换服务器后 rev 不可比，清掉规则库同步游标（本机规则库内容保留）
+        stateDao.delete(SyncState.K_RULELIB_SYNCED_REV)
+        stateDao.delete(SyncState.K_RULELIB_SERVER_REV)
+        stateDao.delete(SyncState.K_RULELIB_UPDATED_AT)
+        stateDao.delete(SyncState.K_RULELIB_UPDATED_BY)
     }
 
     /** 测试连接（已配对时） */
@@ -87,6 +107,99 @@ class SyncRepository(
         val h = SyncClient(cfg.baseUrl, cfg.token, cfg.deviceId).health()
         stateDao.put(SyncState(SyncState.K_SERVER_TIME, h.optString("time")))
         h
+    }
+
+    // ---------- 规则库同步（v1.9.0） ----------
+
+    /** 查电脑端规则库快照（只读，不改本机规则库） */
+    suspend fun fetchRuleLibrary(): RuleLibSnapshot = withContext(Dispatchers.IO) {
+        val cfg = config() ?: throw SyncClientException(0, "尚未配对")
+        val snap = RuleLibSnapshot.fromJson(SyncClient(cfg.baseUrl, cfg.token, cfg.deviceId).getRuleLibrary())
+        stateDao.put(SyncState(SyncState.K_RULELIB_SERVER_REV, snap.rev.toString()))
+        stateDao.put(SyncState(SyncState.K_RULELIB_UPDATED_AT, snap.updatedAt))
+        stateDao.put(SyncState(SyncState.K_RULELIB_UPDATED_BY, snap.updatedBy))
+        snap
+    }
+
+    /** 上传本机规则库 → 电脑端（整库替换，rev+1；其他 PDA 可下载） */
+    suspend fun uploadRuleLibrary(): RuleLibSnapshot = withContext(Dispatchers.IO) {
+        val cfg = config() ?: throw SyncClientException(0, "尚未配对")
+        val models = ruleModelDao.getAll().map { it.name }
+        val rules = ruleLibDao.getAll().map {
+            RuleLibRule(
+                prefix = it.prefix,
+                name = it.name,
+                allowDuplicate = it.allowDuplicate,
+                countEnabled = it.countEnabled,
+                checkHistory = it.checkHistory,
+                ignoreRepeat = it.ignoreRepeat
+            )
+        }
+        if (models.isEmpty() && rules.isEmpty()) {
+            throw SyncClientException(0, "本机规则库为空，没有可上传的规则")
+        }
+        val local = RuleLibSnapshot(
+            hasData = true, rev = 0, models = models, rules = rules,
+            updatedAt = "", updatedBy = cfg.deviceId
+        )
+        val snap = RuleLibSnapshot.fromJson(
+            SyncClient(cfg.baseUrl, cfg.token, cfg.deviceId)
+                .pushRuleLibrary(local.toUploadBody(cfg.deviceId))
+        )
+        stateDao.put(SyncState(SyncState.K_RULELIB_SYNCED_REV, snap.rev.toString()))
+        stateDao.put(SyncState(SyncState.K_RULELIB_SERVER_REV, snap.rev.toString()))
+        stateDao.put(SyncState(SyncState.K_RULELIB_UPDATED_AT, snap.updatedAt))
+        stateDao.put(SyncState(SyncState.K_RULELIB_UPDATED_BY, snap.updatedBy))
+        snap
+    }
+
+    /**
+     * 下载电脑端规则库并整库覆盖本机：
+     *  1) 先备份本机规则库（XLSX，带日期；备份失败则不改库）
+     *  2) 事务内清空 rule_library / rule_models，再写入电脑端快照
+     *  3) 记录已同步 rev
+     * 已装柜的柜子使用各自 load_rules 快照，不受影响。
+     */
+    suspend fun downloadRuleLibrary(): RuleLibDownloadResult = withContext(Dispatchers.IO) {
+        val cfg = config() ?: throw SyncClientException(0, "尚未配对")
+        val snap = RuleLibSnapshot.fromJson(
+            SyncClient(cfg.baseUrl, cfg.token, cfg.deviceId).getRuleLibrary()
+        )
+        if (!snap.hasData || (snap.models.isEmpty() && snap.rules.isEmpty())) {
+            throw SyncClientException(0, "电脑端还没有规则库：请先在一台 PDA 上传本机规则库")
+        }
+        val oldModels = ruleModelDao.getAll()
+        val oldRules = ruleLibDao.getAll()
+        val backup = RuleExporter.backupBeforeSync(oldModels, oldRules)   // 失败会抛出，库不变
+        val names = (snap.models + snap.rules.map { it.name })
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
+        val now = Date()
+        db.withTransaction {
+            ruleLibDao.deleteAll()
+            ruleModelDao.deleteAll()
+            names.forEach { ruleModelDao.insert(RuleModel(name = it, updatedAt = now)) }
+            snap.rules.forEach { r ->
+                ruleLibDao.upsert(
+                    RuleLibEntry(
+                        prefix = r.prefix,
+                        name = r.name,
+                        allowDuplicate = r.allowDuplicate,
+                        countEnabled = r.countEnabled,
+                        checkHistory = r.checkHistory,
+                        ignoreRepeat = r.ignoreRepeat,
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+        stateDao.put(SyncState(SyncState.K_RULELIB_SYNCED_REV, snap.rev.toString()))
+        stateDao.put(SyncState(SyncState.K_RULELIB_SERVER_REV, snap.rev.toString()))
+        stateDao.put(SyncState(SyncState.K_RULELIB_UPDATED_AT, snap.updatedAt))
+        stateDao.put(SyncState(SyncState.K_RULELIB_UPDATED_BY, snap.updatedBy))
+        RuleLibDownloadResult(snap, backup, names.size, snap.rules.size)
     }
 
     /** 一次完整同步：先上行，再下行；异常写 lastError 后抛出 */

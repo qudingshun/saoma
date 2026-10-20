@@ -15,6 +15,8 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
     --icon app.ico `
     --collect-submodules uvicorn `
     --collect-all qrcode `
+    --collect-all openpyxl `
+    --collect-all et_xmlfile `
     --hidden-import uvicorn.logging `
     --hidden-import uvicorn.loops.auto `
     --hidden-import uvicorn.protocols.http.auto `
