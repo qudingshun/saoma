@@ -2,28 +2,67 @@
 装柜 PDA WiFi 同步服务端  v1（P0/P1）
 协议见 docs/WiFi同步/01-总体设计与接口契约.md
 
-启动：
+开发启动：
   .venv\\Scripts\\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8000
+EXE 启动：
+  装柜同步服务.exe   （默认 http://本机IP:8000/，自动打开浏览器）
 """
+import io
 import json
 import os
 import secrets
+import socket
 import sqlite3
+import sys
+import threading
+import webbrowser
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+import qrcode
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 
 # ---------------- 配置 ----------------
-ROOT = Path(__file__).resolve().parent
+# 打包成 exe 后，data 目录放在 exe 旁边（而不是临时解压目录）
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys.executable).resolve().parent
+else:
+    ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 DB_PATH = DATA / "sync.db"
 PORT = int(os.environ.get("SYNC_PORT", "8000"))
 
 TZ = timezone(timedelta(hours=8))          # 固定东八区，避免机器时区设置影响
+
+
+def lan_ip() -> str:
+    """取本机局域网 IP：优先真实出口网卡，失败回退私有网段枚举"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        if not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+    finally:
+        s.close()
+    cands = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith(("192.168.", "10.")) or ip.startswith("172."):
+                cands.append(ip)
+    except OSError:
+        pass
+    return cands[0] if cands else "127.0.0.1"
+
+
+def pair_payload() -> str:
+    return f"SAOMASYNC1|ip={lan_ip()}|port={PORT}|token={TOKEN}|ver=1"
 
 
 def now_iso() -> str:
@@ -244,14 +283,61 @@ def list_scans(request: Request, containerNo: str | None = None,
     return {"count": len(rows), "scans": [dict(r) for r in rows]}
 
 
+@app.get("/api/v1/pair")
+def pair_info():
+    return {"payload": pair_payload(), "ip": lan_ip(), "port": PORT, "token": TOKEN, "ver": 1}
+
+
+@app.get("/api/v1/pair.png")
+def pair_png():
+    img = qrcode.make(pair_payload())
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return f"""<!doctype html><meta charset="utf-8">
-<h2>装柜 PDA 同步服务</h2>
-<p>状态：<a href="/api/v1/health">/api/v1/health</a> ｜ 令牌：<code>{TOKEN}</code></p>
-<p>配对：运行 <code>qr_tool.py</code> 生成 <code>pair.png</code>，或用
-<code>IP:端口#{TOKEN}</code> 在 PDA 手动输入。</p>
-<p>本机 IP 请用 <code>ipconfig</code> 查看，端口 {PORT}。</p>"""
+    url = f"http://{lan_ip()}:{PORT}"
+    return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>装柜同步服务</title>
+<style>
+ body{{font-family:"Microsoft YaHei",sans-serif;margin:24px;color:#222;background:#fafafa}}
+ h2{{margin:0 0 12px}} .card{{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin:12px 0;max-width:900px}}
+ code{{background:#f2f2f2;padding:1px 4px;border-radius:3px}}
+ img{{width:260px;height:260px;border:1px solid #eee}}
+ .ok{{color:#2e7d32;font-weight:bold}} .muted{{color:#777;font-size:13px}}
+ table{{border-collapse:collapse;width:100%;font-size:13px}} th,td{{border-bottom:1px solid #eee;padding:4px 6px;text-align:left}}
+</style></head><body>
+<h2>装柜 PDA 同步服务 <span class="ok">运行中</span></h2>
+<div class="card">
+  <p>电脑地址：<code>{url}</code>　端口：<b>{PORT}</b></p>
+  <p>配对令牌：<code>{TOKEN}</code>　（PDA 手动输入：<code>{lan_ip()}:{PORT}#{TOKEN}</code>）</p>
+  <p>用 PDA「WiFi 同步 → 扫描配对码」扫描下面的二维码：</p>
+  <img src="/api/v1/pair.png" alt="pair qr">
+  <p class="muted">电脑与 PDA 必须在同一 WiFi/局域网；Windows 防火墙需放行 {PORT} 端口（专用网络）。</p>
+</div>
+<div class="card">
+  <p>最近收到的扫码记录（最多 20 条，不含已删除）</p>
+  <table id="t"><thead><tr><th>时间</th><th>柜号</th><th>条码</th><th>结果</th><th>操作员</th></tr></thead><tbody></tbody></table>
+  <p class="muted">接口：<a href="/api/v1/health">/api/v1/health</a> ｜ 本页面仅限局域网访问</p>
+</div>
+<script>
+fetch('/api/v1/scans?limit=20',{{headers:{{'X-Sync-Token':'{TOKEN}'}}}})
+ .then(r=>r.json()).then(d=>{{
+   const b=document.querySelector('#t tbody');
+   d.scans.forEach(s=>{{
+     const tr=document.createElement('tr');
+     [s.scanned_at,s.container_no,s.barcode,s.result,s.operator_id||''].forEach(v=>{{
+       const td=document.createElement('td'); td.textContent=v||''; tr.appendChild(td);
+     }});
+     b.appendChild(tr);
+   }});
+ }}).catch(e=>{{}});
+</script>
+</body></html>"""
 
 
 @app.exception_handler(HTTPException)
@@ -262,4 +348,26 @@ async def http_exc_handler(request: Request, exc: HTTPException):
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Windows 控制台用 UTF-8，避免中文提示乱码
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8")
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        except Exception:
+            pass
+
+    print("=" * 60)
+    print(" 装柜 PDA 同步服务")
+    print(f" 本机访问：http://127.0.0.1:{PORT}/")
+    print(f" 局域网  ：http://{lan_ip()}:{PORT}/")
+    print(f" 令牌    ：{TOKEN}")
+    print(f" 数据目录：{DATA}")
+    print(" 关闭本窗口 = 停止服务")
+    print("=" * 60)
+
+    if os.environ.get("SYNC_NO_BROWSER") != "1":
+        threading.Timer(1.8, lambda: webbrowser.open(f"http://127.0.0.1:{PORT}/")).start()
     uvicorn.run(app, host="0.0.0.0", port=PORT)

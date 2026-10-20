@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -96,6 +97,8 @@ fun HomeScreen(
                     }
                     onOutbound()
                 },
+                // v1.8.1：去掉默认阴影，避免大按钮投影压到下一个按钮的边框
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp),
                 modifier = Modifier.fillMaxWidth().height(88.dp)
             ) {
                 Text("出库扫码", fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -108,7 +111,7 @@ fun HomeScreen(
                 )
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(28.dp))
 
             if (lastContainerNo != null) {
                 // 继续装柜快捷入口：带出最近柜号进入设置页（自动载入原规则 + 已扫码数量）

@@ -58,6 +58,20 @@ start pair.png
 
 用「任务计划程序」创建任务：触发器 = 登录时，操作 = 启动
 `E:\saoma-sync\run_server.bat`，勾选「隐藏」、最高权限。
+免安装 EXE 版本可用同目录的「开机自启（可选）.bat」创建启动快捷方式。
+
+## 4.1 打包成 EXE（换电脑/客户机免装 Python）
+
+开发机执行 `build_exe.ps1`（需要 Python 3.11，仅打包机需要）：
+
+```powershell
+.\build_exe.ps1
+```
+
+产物 `dist\ZhuangGuiSyncServer.exe`，改名为 `装柜同步服务.exe` 后与
+`使用说明.txt`、`防火墙放行（管理员）.bat`、`开机自启（可选）.bat` 一起压缩交付。
+EXE 首次运行会在**自身目录**创建 `data\`（token + SQLite），不依赖 Python 环境。
+Web 管理页：`http://127.0.0.1:8000/`（配对二维码、令牌、最近记录）。
 
 ## 5. 现场网络
 
@@ -73,3 +87,5 @@ start pair.png
 - 软删除 / 撤回状态同步
 - uid 幂等（重复上传不翻倍）
 - 401 token 失效提示
+- EXE 免安装包：双击运行、浏览器自动打开管理页（配对二维码/令牌/最近记录），
+  数据存 exe 同目录 `data\`；已在全新目录解压运行验证
