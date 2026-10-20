@@ -612,7 +612,7 @@ private fun RulePickerDialog(
                 OutlinedTextField(
                     value = filter,
                     onValueChange = { filter = it.uppercase() },
-                    label = { Text("过滤前缀/型号") },
+                    label = { Text("过滤型号/前缀") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -644,12 +644,23 @@ private fun RulePickerDialog(
                                     onCheckedChange = null
                                 )
                                 Column(Modifier.weight(1f)) {
-                                    Text(entry.prefix, fontSize = 16.sp)
-                                    if (entry.name.isNotBlank()) {
-                                        Text(entry.name, fontSize = 12.sp, color = Color.Gray)
+                                    // v1.7.3：名称（型号）作为主要显示，前缀/开关作为细则次要显示
+                                    val primary = entry.name.ifBlank { entry.prefix }
+                                    Text(
+                                        primary,
+                                        fontSize = 16.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val detail = buildString {
+                                        if (entry.name.isNotBlank()) append(entry.prefix)
+                                        flagSummary(entry)?.let {
+                                            if (isNotEmpty()) append("  ")
+                                            append(it)
+                                        }
                                     }
-                                    flagSummary(entry)?.let {
-                                        Text(it, fontSize = 11.sp, color = Color(0xFF616161))
+                                    if (detail.isNotBlank()) {
+                                        Text(detail, fontSize = 12.sp, color = Color.Gray)
                                     }
                                 }
                                 if (inContainer) {
