@@ -214,7 +214,8 @@ fun RulesScreen(
             }
 
             Text(
-                "先建型号，再点型号行「添加规则」逐个添加前缀；导入/导出为 XLSX（型号 / 前缀 / 四个开关）",
+                "先建型号，再点型号行「添加规则」逐个添加前缀；导入/导出为 XLSX（型号 / 前缀 / 四个开关）。\n" +
+                    "导出文件名带日期时间；导入前会自动备份当前规则库（带日期），旧文件不会被覆盖。",
                 fontSize = 11.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 2.dp)
             )

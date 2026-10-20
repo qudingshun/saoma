@@ -2,7 +2,7 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回。
 
-**当前版本：v1.8.1（versionCode 25，数据库 v14）** ｜ 状态：v1.8.1 修复首页「出库扫码」按钮投影压住下一按钮边框；WiFi 同步（局域网，未配对不影响扫码）
+**当前版本：v1.8.2（versionCode 26，数据库 v14）** ｜ 状态：v1.8.2 规则库导出/导入前备份带日期；电脑端同步服务自动生成「日期/柜号.tsv」；WiFi 同步（局域网，未配对不影响扫码）
 
 ## 操作指南
 
@@ -55,6 +55,7 @@
 - 同步内容：扫码记录（含正常/串号/重复/超量/辅助、软删除/撤回状态）；uid 幂等，重复上传不翻倍。
 - PC 端源码：`docs/WiFi同步/pc-server/`（FastAPI + SQLite，纯局域网、无云服务）；部署见该目录 README 与 `docs/WiFi同步/03-电脑端实施步骤.md`。
 - 电脑端免安装版：双击 `装柜同步服务.exe` 即运行（无需 Python），浏览器自动打开管理页（配对二维码/令牌/最近记录）；打包脚本 `docs/WiFi同步/pc-server/build_exe.ps1`。
+- 电脑端自动落盘（v1.8.2）：收到记录后按 `data\装柜记录\yyyy-MM-dd\柜号.tsv` 生成（与 PDA 同格式，Excel 直接打开）；删除/撤回的记录在 `data\回收站\...`；启动时按数据库自动重建，历史记录也有文件。
 - 安全：仅局域网 HTTP + `X-Sync-Token`；未配对/服务不可达时完全不影响扫码；设置页可「解除配对」。
 - P2（电脑下发装柜任务到 PDA 收件箱）接口已预留，界面待下一波实现。
 
@@ -134,7 +135,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析，37 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 7 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖，38 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 7 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在**仓库外** `E:\saoma-keystore\zhuanggui-release.jks`；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装（需 `run-as` 排障时装 debug）
 - ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份（备份说明随 keystore 目录）；**换签名身份 = 设备需卸载重装**（先快照、装后用快照回灌，见 `子项目计划.md`）——本机 2026-10-19 已完成一次性签名切换（快照 → 卸载 → 装新签名包 → 回灌验证，数据零丢失），此后 debug / release 互装均无需卸载
@@ -190,7 +191,8 @@ app/src/main/java/com/zhuanggui/pda/
 
 - 导出格式（推荐）：`型号名称 | 前缀 | 可重复扫 | 计入统计 | 查历史串号 | 忽略`（是/否）
   - 每个型号可有多行（多个前缀）；空型号也导出为一行（前缀留空），导入时用于建空型号
-  - 路径：`/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.xlsx`（列宽已设置、首行冻结）
+  - 路径：`/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.xlsx`（列宽已设置、首行冻结；同日/同秒自动追加 `_2`，不会覆盖旧文件）
+  - v1.8.2：点「导入」会先自动备份当前规则库到 `规则库_导入前备份_yyyyMMdd_HHmmss.xlsx`，再按前缀覆盖；备份失败则取消导入，旧内容不丢
 - 导入：支持 .xlsx / .xls / .csv / .txt / .tsv
   - 新 XLSX 按表头自动识别「型号名称在前」；旧文件（前缀在第一列）继续兼容
   - 只有型号、没有前缀的行 = 建空型号
@@ -201,6 +203,7 @@ app/src/main/java/com/zhuanggui/pda/
 
 ## 版本历史
 
+- **v1.8.2（versionCode 26，DB v14）**：规则库文件不覆盖——导出文件名带日期时间（同秒自动 `_2`）；**导入前自动备份**当前规则库（`规则库_导入前备份_日期时间.xlsx`），备份失败则取消导入，避免覆盖后无法回退；电脑端同步服务新增 TSV 落盘：`data\装柜记录\日期\柜号.tsv`（与 PDA 同格式、UTF-8 BOM，Excel 直接打开），删除/撤回记录进 `data\回收站\日期\柜号.tsv`，启动时按数据库重建历史文件
 - **v1.8.1（versionCode 25，DB v14）**：首页修复——「出库扫码」大按钮去掉默认投影、与下一按钮的间距 20→28dp，避免按钮阴影/背景压住「扫码记录查看」边框；电脑端同步服务新增 Web 管理页（配对二维码/令牌/最近记录）与 EXE 打包（见 `docs/WiFi同步/pc-server/`）
 - **v1.8.0（versionCode 24，DB v14）**：可选 WiFi 同步（P0 配对 + P1 扫码记录回传）——首页「WiFi 同步」入口；电脑端同步服务（FastAPI + SQLite，源码 `docs/WiFi同步/pc-server/`，运行目录 `E:\saoma-sync`，纯局域网）；二维码/手输配对（配对时直接校验 token）；扫码后 5 秒合并自动上传、后台 15 分钟补传、断网缓存恢复后补传；软删除/撤回状态同步，`uid` 幂等（重复上传不翻倍）；设置页显示待传条数、服务器时间、上次同步/错误，可测试连接/立即同步/解除配对；未配对或服务不可达完全不影响扫码；DB v13→v14（scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox）；单测 37 项、迁移测试 7 项
 - **v1.7.5（versionCode 23，DB v13）**：规则库「型号优先」维护——先「新增型号」，再在型号行点「＋ 添加规则」逐个添加前缀；列表默认折叠，只显示型号名称与规则条数，点型号行展开规则（可改名/删除型号，删除型号会连同其下规则删除）；导出改为 **XLSX**（型号名称 / 前缀 / 四个开关，是/否），列宽/表头已设置，导入按表头自动识别型号在前或前缀在前的两种格式；空型号可导出/导入；DB v12→v13 新增 `rule_models`（现有规则名称去重回填），历史规则行为不变；单测 32 项、迁移测试 6 项通过

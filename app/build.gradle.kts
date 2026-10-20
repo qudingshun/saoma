@@ -23,8 +23,8 @@ android {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.8.1"
+        versionCode = 26
+        versionName = "1.8.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

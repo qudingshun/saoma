@@ -20,6 +20,7 @@ import java.util.zip.ZipOutputStream
  * 这里用最小 SpreadsheetML（zip + xml）直接生成，Excel/WPS 均可正常打开。
  *
  * 路径：/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.xlsx
+ * 导入前备份：规则库_导入前备份_yyyyMMdd_HHmmss.xlsx（同名自动 _2、_3，绝不覆盖旧文件）
  */
 object RuleExporter {
 
@@ -31,10 +32,35 @@ object RuleExporter {
 
     fun displayDir(): String = "/sdcard/$DIR"
 
+    /** 同名文件已存在时追加 _2、_3…，避免同一秒内导出/备份互相覆盖 */
+    internal fun uniqueFile(dir: File, baseName: String): File {
+        var file = File(dir, "$baseName.xlsx")
+        var n = 2
+        while (file.exists()) {
+            file = File(dir, "${baseName}_$n.xlsx")
+            n++
+        }
+        return file
+    }
+
     fun export(models: List<RuleModel>, rules: List<RuleLibEntry>): File {
         val dir = File(android.os.Environment.getExternalStorageDirectory(), DIR)
         dir.mkdirs()
-        val file = File(dir, "规则库_${timeFormat.format(LocalDateTime.now())}.xlsx")
+        val file = uniqueFile(dir, "规则库_${timeFormat.format(LocalDateTime.now())}")
+        exportTo(file, models, rules)
+        return file
+    }
+
+    /**
+     * 导入前备份（v1.8.2）：规则导入会按前缀覆盖，先把当前规则库原样导出到
+     * 规则库_导入前备份_yyyyMMdd_HHmmss.xlsx，供核对/回退。
+     * 返回 null = 当前规则库为空，无需备份。
+     */
+    fun backupBeforeImport(models: List<RuleModel>, rules: List<RuleLibEntry>): File? {
+        if (models.isEmpty() && rules.isEmpty()) return null
+        val dir = File(android.os.Environment.getExternalStorageDirectory(), DIR)
+        dir.mkdirs()
+        val file = uniqueFile(dir, "规则库_导入前备份_${timeFormat.format(LocalDateTime.now())}")
         exportTo(file, models, rules)
         return file
     }

@@ -10,6 +10,7 @@ EXE 启动：
 import io
 import json
 import os
+import re
 import secrets
 import socket
 import sqlite3
@@ -139,9 +140,117 @@ def next_task_rev(conn) -> int:
     return int(conn.execute("SELECT v FROM meta WHERE k = 'task_rev'").fetchone()["v"])
 
 
+# ---------------- 电脑端 TSV 落盘（按日期 / 柜号，和 PDA 本地文件同格式） ----------------
+RECORD_DIR = DATA / "装柜记录"
+TRASH_DIR = DATA / "回收站"
+TSV_HEADER = "\ufeff时间\t柜号\t条码\t完整码\t结果\t操作员\n"
+
+RESULT_LABELS = {
+    "OK": "正常",
+    "NOT_IN_LIST": "不在清单",
+    "OVER_LIMIT": "超量",
+    "SERIAL_MISMATCH": "串号",
+    "DUPLICATE": "重复",
+    "AUX": "辅助",
+}
+
+
+def _record_time(raw: str) -> tuple[str, str]:
+    """ISO 时间 -> (日期 yyyy-MM-dd, 显示时间 yyyy-MM-dd HH:mm:ss)，固定东八区"""
+    s = (raw or "").strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)
+        dt = dt.astimezone(TZ)
+        return dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        day = s[:10] if len(s) >= 10 else "未知日期"
+        return day, (s.replace("T", " ")[:19] or s)
+
+
+def _safe_file_name(name: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]', "_", (name or "").strip())
+    return cleaned or "未填柜号"
+
+
+def _write_tsv(path: Path, rows: list[sqlite3.Row]) -> None:
+    """整文件重写（临时文件 + 替换，避免 Excel 打开时读到半截）"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parts = [TSV_HEADER]
+    for r in rows:
+        _, shown = _record_time(r["scanned_at"])
+        result = (r["result"] or "").upper()
+        parts.append("\t".join([
+            shown,
+            r["container_no"] or "",
+            r["barcode"] or "",
+            r["full_code"] or "",
+            RESULT_LABELS.get(result, r["result"] or ""),
+            r["operator_id"] or "",
+        ]) + "\n")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("".join(parts), encoding="utf-8", newline="")
+    os.replace(tmp, path)
+
+
+def rebuild_container_files(conn, container_no: str) -> int:
+    """把一个柜号的记录按「日期/柜号.tsv」重写到 装柜记录 / 回收站；返回写出的文件数"""
+    rows = conn.execute(
+        "SELECT * FROM scans WHERE COALESCE(container_no, '') = ? "
+        "ORDER BY scanned_at, uid", (container_no or "",)).fetchall()
+    active: dict[str, list] = {}
+    trash: dict[str, list] = {}
+    for r in rows:
+        day, _ = _record_time(r["scanned_at"])
+        (trash if r["deleted_at"] else active).setdefault(day, []).append(r)
+
+    name = _safe_file_name(container_no) + ".tsv"
+    written = 0
+    for base, groups in ((RECORD_DIR, active), (TRASH_DIR, trash)):
+        if base.exists():
+            for day_dir in list(base.iterdir()):
+                if not day_dir.is_dir() or day_dir.name in groups:
+                    continue
+                old = day_dir / name          # 该柜号在这个日期已没有记录 -> 删掉旧文件
+                if old.exists():
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+                try:
+                    day_dir.rmdir()           # 空目录顺手清理
+                except OSError:
+                    pass
+        for day, items in groups.items():
+            _write_tsv(base / day / name, items)
+            written += 1
+    return written
+
+
+def rebuild_all_exports() -> int:
+    """启动时/手动重建全部柜号的 TSV；返回柜号数"""
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT COALESCE(container_no, '') AS c FROM scans ORDER BY c").fetchall()
+        for row in rows:
+            rebuild_container_files(conn, row["c"])
+        return len(rows)
+
+
 # ---------------- app ----------------
 app = FastAPI(title="装柜 PDA 同步服务", version="1")
 init_db()
+
+
+@app.on_event("startup")
+def _startup_rebuild_exports():
+    """启动时按数据库重建电脑端 TSV（升级/换电脑后历史记录也有文件）"""
+    try:
+        n = rebuild_all_exports()
+        print(f"电脑端 TSV 已生成：{n} 个柜号 -> {RECORD_DIR}")
+    except Exception as exc:          # 文件写失败不影响扫码同步
+        print(f"电脑端 TSV 生成失败（不影响同步）：{exc}")
 
 
 def check_token(request: Request):
@@ -155,7 +264,16 @@ def health():
     with closing(db()) as conn:
         total = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
     return {"ok": True, "serverVer": 1, "time": now_iso(),
-            "dbPath": str(DB_PATH), "pendingScans": total}
+            "dbPath": str(DB_PATH), "exportDir": str(RECORD_DIR),
+            "pendingScans": total}
+
+
+@app.post("/api/v1/rebuild-exports")
+def rebuild_exports(request: Request):
+    """按数据库重建电脑端 TSV（换电脑/手工改过文件后可调用）"""
+    check_token(request)
+    n = rebuild_all_exports()
+    return {"ok": True, "containers": n, "dir": str(RECORD_DIR)}
 
 
 # ---------- 下行：PDA 拉任务 ----------
@@ -219,6 +337,7 @@ async def push_scans(request: Request):
 
     accepted = duplicated = 0
     rejected = []
+    affected: set[str] = set()
     ts = now_iso()
     with closing(db()) as conn:
         for s in scans:
@@ -240,8 +359,15 @@ async def push_scans(request: Request):
                 duplicated += 1      # 未新增（可能只更新了 deletedAt），不算错误
             else:
                 accepted += 1
+            affected.add((s.get("containerNo") or "").strip())
         conn.commit()
         total = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
+        # 落盘：每个受影响的柜号重写自己的日期文件（删除/撤回也会同步到回收站）
+        for container_no in affected:
+            try:
+                rebuild_container_files(conn, container_no)
+            except Exception as exc:
+                print(f"TSV 写入失败（{container_no}）：{exc}")
 
     return {"accepted": accepted, "duplicated": duplicated, "rejected": rejected,
             "serverRevOut": total, "serverTime": now_iso()}
@@ -318,6 +444,8 @@ def home():
   <p>用 PDA「WiFi 同步 → 扫描配对码」扫描下面的二维码：</p>
   <img src="/api/v1/pair.png" alt="pair qr">
   <p class="muted">电脑与 PDA 必须在同一 WiFi/局域网；Windows 防火墙需放行 {PORT} 端口（专用网络）。</p>
+  <p>电脑端记录文件：<code>{RECORD_DIR}</code><br>
+  <span class="muted">按「日期\\柜号.tsv」自动生成（Excel 可直接打开）；删除的记录在 <code>{TRASH_DIR}</code>。</span></p>
 </div>
 <div class="card">
   <p>最近收到的扫码记录（最多 20 条，不含已删除）</p>

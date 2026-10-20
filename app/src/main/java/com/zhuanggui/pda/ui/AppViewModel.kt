@@ -1269,6 +1269,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 规则源导入：解析 .xlsx/.xls/.csv/.txt（第一列=前缀，第二列可选=名称，第 3~6 列可选=四个开关），
      * 全部写入规则库；前缀冲突则覆盖。源文件不带开关列时保留库内原开关（只更新名称）。
+     * v1.8.2：覆盖前自动导出当前规则库做日期备份；备份失败则取消导入。
      * 结果通过 [ruleLibMessage] 提示。
      */
     fun importRuleSource(context: Context, uri: Uri) {
@@ -1282,11 +1283,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     val ruleRows = parsed.filter { it.prefix.isNotBlank() }
                     val modelNames = parsed.map { it.name.trim() }.filter { it.isNotBlank() }.distinct()
+                    // v1.8.2：覆盖导入前先按日期备份当前规则库；备份失败则不导入，避免旧内容丢失
+                    val oldModels = ruleModelDao.getAll()
+                    val oldRules = ruleLibDao.getAll()
+                    val backup = withContext(Dispatchers.IO) {
+                        RuleExporter.backupBeforeImport(oldModels, oldRules)
+                    }
                     var added = 0
                     var updated = 0
                     app.database.withTransaction {
                         modelNames.forEach { ruleModelDao.insert(RuleModel(name = it)) }
-                        val existing = ruleLibDao.getAll().associateBy { it.prefix }
+                        val existing = oldRules.associateBy { it.prefix }
                         ruleRows.forEach { p ->
                             val old = existing[p.prefix]
                             if (old != null) updated++ else added++
@@ -1308,9 +1315,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     buildString {
                         append("导入完成：新增 $added 条，覆盖 $updated 条，共 ${ruleRows.size} 条")
                         if (modelNames.isNotEmpty()) append("；型号 ${modelNames.size} 个")
+                        if (backup != null) {
+                            append("\n\n导入前已备份（含日期，不覆盖旧文件）：\n")
+                            append("${RuleExporter.displayDir()}/${backup.name}")
+                        }
                     }
                 }
-            }.getOrElse { "导入失败：${it.message ?: "文件无法解析"}" }
+            }.getOrElse { "导入失败（规则库未修改）：${it.message ?: "文件无法解析"}" }
             _ruleImporting.value = false
             _ruleLibMessage.value = result
         }

@@ -11,6 +11,7 @@ import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
 
 /** XLSX 导出/导入往返单测（v1.7.5）：型号主显示、四开关、空型号、旧格式兼容。 */
 class RuleExcelTest {
@@ -82,6 +83,23 @@ class RuleExcelTest {
         )
         val parsed = RuleSourceImporter.parseExcel(ByteArrayInputStream(bytes.toByteArray()))
         assertEquals(listOf("844", "845"), parsed.map { it.prefix })
+    }
+
+    @Test
+    fun uniqueFile_neverOverwrites() {
+        val dir = Files.createTempDirectory("rulexport").toFile()
+        try {
+            val base = "规则库_20261020_120000"
+            val a = RuleExporter.uniqueFile(dir, base)
+            a.writeText("old")
+            val b = RuleExporter.uniqueFile(dir, base)
+            assertEquals("$base.xlsx", a.name)
+            assertEquals("${base}_2.xlsx", b.name)
+            assertFalse(b.exists())
+            assertEquals("old", a.readText())
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     private fun workbook(rows: List<List<String>>): ByteArrayOutputStream {
