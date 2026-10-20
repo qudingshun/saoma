@@ -21,8 +21,9 @@ import org.junit.runner.RunWith
  *    （用导出的 10.json 建库，默认值校验）
  *  - v11 → v12：load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 旧行为）
  *  - v12 → v13：新增 rule_models（型号），现有规则里的型号名称去重回填
- *  - v5 → v13 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→13 并按 13.json 校验。
+ *  - v13 → v14：scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox（WiFi 同步）
+ *  - v5 → v14 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→14 并按 14.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -200,9 +201,52 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v13 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v13（有 schema）→ v14：加 uid/syncedAt、建 sync_state/sync_inbox，历史记录 uid 全部回填且唯一 */
     @Test
-    fun migrate5To13_fullChain() {
+    fun migrate13To14_addsSyncColumns() {
+        helper.createDatabase(TEST_DB, 13).use { db ->
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-13TO14', 10, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL(
+                "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt, deletedAt, operatorId) " +
+                    "VALUES (1, 'C-13TO14', 'XYZ0001', 'C-13TO14，XYZ0001', 'OK', 1730000000000, NULL, 'A')"
+            )
+            db.execSQL(
+                "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt, deletedAt, operatorId) " +
+                    "VALUES (1, 'C-13TO14', 'XYZ0002', 'C-13TO14，XYZ0002', 'OK', 1730000000001, NULL, 'A')"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, AppDatabase.ALL_MIGRATIONS[12])
+        try {
+            db.query("SELECT uid, syncedAt FROM scan_records").use { c ->
+                val uids = mutableSetOf<String>()
+                while (c.moveToNext()) {
+                    val uid = c.getString(0)
+                    assertTrue(uid.isNotBlank())
+                    uids.add(uid)
+                    assertTrue(c.isNull(1))
+                }
+                assertEquals(2, uids.size)
+            }
+            db.query("SELECT COUNT(*) FROM sync_state").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+            db.query("SELECT COUNT(*) FROM sync_inbox").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v14 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To14_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -267,9 +311,9 @@ class MigrationTest {
             db.version = 5
         }
 
-        // 跑 5→6→…→13（起点无 schema JSON，drop 校验传 false），结束后按 13.json 全量校验
+        // 跑 5→6→…→14（起点无 schema JSON，drop 校验传 false），结束后按 14.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 13, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 12)
+            TEST_DB, 14, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 13)
         )
         try {
             // 数据保留
@@ -315,6 +359,11 @@ class MigrationTest {
             db.query("SELECT name FROM rule_models").use { c ->
                 c.moveToFirst()
                 assertEquals("型号五", c.getString(0))
+            }
+            // v14 同步列：历史记录 uid 全部回填
+            db.query("SELECT COUNT(*) FROM scan_records WHERE uid = ''").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
             }
         } finally {
             db.close()

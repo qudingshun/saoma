@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  局域网 WiFi 同步（v1.8.0）：PDA 访问电脑上的 http://<pc-ip>:8000。
+  Android 9+ 默认禁止明文 HTTP，这里仅对内部局域网工具放行；
+  如现场有固定网段，可把 base-config 换成 domain-config 绑定具体 IP。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

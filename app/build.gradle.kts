@@ -23,8 +23,8 @@ android {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.7.5"
+        versionCode = 24
+        versionName = "1.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -100,6 +100,10 @@ dependencies {
     implementation("org.apache.poi:poi:5.2.5")
     implementation("org.apache.poi:poi-ooxml:5.2.5")
     implementation("org.apache.commons:commons-compress:1.26.2")
+
+    // WiFi 同步（v1.8.0）：仅这两个依赖（org.json 系统自带）
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

@@ -40,15 +40,18 @@ import com.zhuanggui.pda.export.FileExporter
  *  1. 出库扫码（主流程：柜号/数量/条码规则 → 装柜扫码 → 自动落盘）
  *  2. 继续装柜（快捷入口：最近有扫码记录时出现，一键带出最近的柜号续扫）
  *  3. 扫码记录查看
+ *  4. WiFi 同步（v1.8.0：局域网配对/上传；未配对不影响扫码）
  *
  * 注：老的「Excel 导入工单（防错校验）」已下架，源码存档见 archive/excel-workorder-v1.2.0/
  */
 @Composable
 fun HomeScreen(
     lastContainerNo: String?,
+    syncPending: Int,
     onOutbound: () -> Unit,
     onContinueLast: (String) -> Unit,
-    onRecords: () -> Unit
+    onRecords: () -> Unit,
+    onSync: () -> Unit
 ) {
     Scaffold { pad ->
         val context = LocalContext.current
@@ -125,7 +128,18 @@ fun HomeScreen(
                 Text("扫码记录查看", fontSize = 20.sp)
             }
 
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onSync,
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            ) {
+                Text(
+                    if (syncPending > 0) "WiFi 同步（$syncPending 条待传）" else "WiFi 同步",
+                    fontSize = 18.sp
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
             Text(
                 "记录自动保存：${FileExporter.displayPath()}/",
                 fontSize = 13.sp,

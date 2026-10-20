@@ -13,17 +13,22 @@ import com.zhuanggui.pda.data.dao.LoadRuleDao
 import com.zhuanggui.pda.data.dao.RuleLibDao
 import com.zhuanggui.pda.data.dao.RuleModelDao
 import com.zhuanggui.pda.data.dao.ScanRecordDao
+import com.zhuanggui.pda.data.dao.SyncInboxDao
+import com.zhuanggui.pda.data.dao.SyncStateDao
 import com.zhuanggui.pda.data.entity.LoadContainer
 import com.zhuanggui.pda.data.entity.LoadRule
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.data.entity.ScanRecord
+import com.zhuanggui.pda.data.entity.SyncInbox
+import com.zhuanggui.pda.data.entity.SyncState
 
 @Database(
     entities = [
-        LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class, RuleModel::class
+        LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class, RuleModel::class,
+        SyncState::class, SyncInbox::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -33,6 +38,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun scanRecordDao(): ScanRecordDao
     abstract fun ruleLibDao(): RuleLibDao
     abstract fun ruleModelDao(): RuleModelDao
+    abstract fun syncStateDao(): SyncStateDao
+    abstract fun syncInboxDao(): SyncInboxDao
 
     companion object {
         @Volatile
@@ -229,11 +236,45 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v13 → v14：新增 WiFi 同步（uid 幂等键 / syncedAt 待传标记 / sync_state / sync_inbox） */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE scan_records ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE scan_records ADD COLUMN syncedAt INTEGER")
+                db.execSQL("UPDATE scan_records SET uid = lower(hex(randomblob(16))) WHERE uid = ''")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_scan_records_uid` ON `scan_records` (`uid`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_scan_records_syncedAt` ON `scan_records` (`syncedAt`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `sync_state` (" +
+                        "`k` TEXT NOT NULL, `v` TEXT NOT NULL, PRIMARY KEY(`k`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `sync_inbox` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`containerNo` TEXT NOT NULL, " +
+                        "`totalQuantity` INTEGER NOT NULL, " +
+                        "`note` TEXT NOT NULL, " +
+                        "`rulesJson` TEXT NOT NULL, " +
+                        "`serverRev` INTEGER NOT NULL, " +
+                        "`receivedAt` INTEGER NOT NULL, " +
+                        "`consumedAt` INTEGER)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_inbox_containerNo` " +
+                        "ON `sync_inbox` (`containerNo`)"
+                )
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14
         )
     }
 }

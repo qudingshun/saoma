@@ -66,11 +66,11 @@ interface ScanRecordDao {
     // -------- 软删除（回收站）：删除 = 打标记，可在回收站撤回 --------
 
     /** 软删除单条（扫码页） */
-    @Query("UPDATE scan_records SET deletedAt = :at WHERE id = :id AND deletedAt IS NULL")
+    @Query("UPDATE scan_records SET deletedAt = :at, syncedAt = NULL WHERE id = :id AND deletedAt IS NULL")
     suspend fun softDeleteById(id: Long, at: Date)
 
     /** 软删除多条（撤回栈批量用） */
-    @Query("UPDATE scan_records SET deletedAt = :at WHERE id IN (:ids) AND deletedAt IS NULL")
+    @Query("UPDATE scan_records SET deletedAt = :at, syncedAt = NULL WHERE id IN (:ids) AND deletedAt IS NULL")
     suspend fun softDeleteIds(ids: List<Long>, at: Date)
 
     /**
@@ -78,7 +78,7 @@ interface ScanRecordDao {
      * 日期表达式与 [observeDayGroups] 的分组表达式一致（本地时区）。
      */
     @Query(
-        "UPDATE scan_records SET deletedAt = :at WHERE containerId = :containerId " +
+        "UPDATE scan_records SET deletedAt = :at, syncedAt = NULL WHERE containerId = :containerId " +
             "AND strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') = :dayLabel " +
             "AND deletedAt IS NULL"
     )
@@ -92,12 +92,12 @@ interface ScanRecordDao {
     )
     suspend fun getAllGroup(containerId: Long, dayLabel: String): List<ScanRecord>
 
-    /** 撤回：恢复指定记录（deletedAt 置空） */
-    @Query("UPDATE scan_records SET deletedAt = NULL WHERE id IN (:ids)")
+    /** 撤回：恢复指定记录（deletedAt 置空；同步状态清除 → 重新上传删除状态） */
+    @Query("UPDATE scan_records SET deletedAt = NULL, syncedAt = NULL WHERE id IN (:ids)")
     suspend fun restoreIds(ids: List<Long>)
 
     /** 回收站：全部撤回 */
-    @Query("UPDATE scan_records SET deletedAt = NULL WHERE deletedAt IS NOT NULL")
+    @Query("UPDATE scan_records SET deletedAt = NULL, syncedAt = NULL WHERE deletedAt IS NOT NULL")
     suspend fun restoreAll()
 
     /** 回收站列表（新删的在前） */
@@ -159,6 +159,25 @@ interface ScanRecordDao {
             "AND strftime('%Y-%m-%d', scannedAt / 1000, 'unixepoch', 'localtime') = :dayLabel"
     )
     suspend fun countByResultOnDay(containerId: Long, result: String, dayLabel: String): Int
+
+    // ---------- WiFi 同步（v14） ----------
+
+    /** 待上传：syncedAt IS NULL（新记录 / 删除状态变化 / 撤回） */
+    @Query("SELECT * FROM scan_records WHERE syncedAt IS NULL ORDER BY scannedAt, id LIMIT :limit")
+    suspend fun pendingSync(limit: Int): List<ScanRecord>
+
+    @Query("SELECT COUNT(*) FROM scan_records WHERE syncedAt IS NULL")
+    fun observePendingCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM scan_records WHERE syncedAt IS NULL")
+    suspend fun countPending(): Int
+
+    /** 上传成功回写；传 null 表示需要重传（软删除变化时用） */
+    @Query("UPDATE scan_records SET syncedAt = :at WHERE uid IN (:uids)")
+    suspend fun markSynced(uids: List<String>, at: Date?)
+
+    @Query("UPDATE scan_records SET syncedAt = NULL WHERE id = :id")
+    suspend fun resetSynced(id: Long)
 }
 
 @Dao

@@ -19,7 +19,10 @@ import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.export.FileExporter
 import com.zhuanggui.pda.export.RuleExporter
 import com.zhuanggui.pda.importer.RuleSourceImporter
+import com.zhuanggui.pda.net.PairingInfo
+import com.zhuanggui.pda.net.SyncRepository
 import com.zhuanggui.pda.scan.AlarmManager
+import com.zhuanggui.pda.sync.SyncScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -64,6 +67,19 @@ data class RuleSpec(
     val serialMax: String = "",
     val serialTailLen: Int = 0,
     val ignoreRepeat: Boolean = false
+)
+
+/** WiFi 同步界面状态（v1.8.0） */
+data class SyncUiState(
+    val paired: Boolean = false,
+    val baseUrl: String = "",
+    val deviceId: String = "",
+    val lastSyncAt: Long = 0L,
+    val lastError: String = "",
+    val serverTime: String = "",
+    val pairing: Boolean = false,
+    val busy: Boolean = false,
+    val message: String? = null
 )
 
 /** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」；v1.7.0：计划随柜回显） */
@@ -138,6 +154,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val alarm = AlarmManager(application)
 
     private val scanner = app.scannerManager
+
+    /** WiFi 同步（v1.8.0）：旁挂能力，未配对时完全不影响扫码 */
+    private val syncRepository = app.syncRepository
+    private val syncStateDao = app.database.syncStateDao()
 
     // ---------- 数据层 ----------
     private val containerDao = app.database.loadContainerDao()
@@ -215,15 +235,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _ruleExporting = MutableStateFlow(false)
     val ruleExporting: StateFlow<Boolean> = _ruleExporting.asStateFlow()
 
+    // ---------- WiFi 同步（v1.8.0） ----------
+
+    private val _syncUi = MutableStateFlow(SyncUiState())
+    val syncUi: StateFlow<SyncUiState> = _syncUi.asStateFlow()
+
+    /** 待上传条数（扫码页/首页实时显示） */
+    val syncPending: StateFlow<Int> = syncRepository.observePendingCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** 配对模式：下一条扫码内容按配对码解析（不影响正常扫码） */
+    private val _pairing = MutableStateFlow(false)
+
     private var recordsJob: Job? = null
     private var containerLookupJob: Job? = null
 
     init {
         scanner.register()
+        refreshSyncState()
         viewModelScope.launch {
             scanner.scans.collect { barcode ->
                 // 兜底：单次扫码事件处理异常绝不终止采集流（否则之后所有扫码都会静默失效）
                 try {
+                    // 配对模式：这一枪按配对码解析（二维码/一维码兜底），不进入规则/工号
+                    if (_pairing.value) {
+                        _pairing.value = false
+                        _syncUi.update { it.copy(pairing = false) }
+                        pairWithCode(barcode)
+                        return@collect
+                    }
                     when {
                         // 装柜进行中 → 正常校验
                         _outboundStage.value == OutboundStage.SCANNING &&
@@ -239,6 +279,136 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    // ==================== WiFi 同步（v1.8.0） ====================
+
+    /** 读 sync_state → 界面状态（未配对也可看 deviceId 与上次错误） */
+    fun refreshSyncState() {
+        viewModelScope.launch {
+            val url = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_SERVER_URL).orEmpty()
+            val token = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_TOKEN).orEmpty()
+            val device = syncRepository.ensureDeviceId()
+            val last = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_LAST_SYNC_AT)
+                ?.toLongOrNull() ?: 0L
+            val err = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_LAST_ERROR).orEmpty()
+            val st = syncStateDao.get(com.zhuanggui.pda.data.entity.SyncState.K_SERVER_TIME).orEmpty()
+            _syncUi.update {
+                it.copy(
+                    paired = url.isNotBlank() && token.isNotBlank(),
+                    baseUrl = url,
+                    deviceId = device,
+                    lastSyncAt = last,
+                    lastError = err,
+                    serverTime = st
+                )
+            }
+        }
+    }
+
+    /** 进入配对模式：下一枪扫码按配对码解析 */
+    fun startPairing() {
+        _pairing.value = true
+        _syncUi.update {
+            it.copy(pairing = true, message = "请用扫码枪扫描电脑屏幕上的配对二维码（或点「手动输入」）")
+        }
+    }
+
+    fun cancelPairing() {
+        _pairing.value = false
+        _syncUi.update { it.copy(pairing = false) }
+    }
+
+    /** 配对码：SAOMASYNC1|ip=..|port=..|token=.. 或手输 ip:port#token */
+    fun pairWithCode(raw: String) {
+        val info = PairingInfo.parse(raw)
+        if (info == null) {
+            _syncUi.update { it.copy(message = "配对码无效：$raw") }
+            return
+        }
+        viewModelScope.launch {
+            _syncUi.update { it.copy(busy = true, message = null) }
+            runCatching { withContext(Dispatchers.IO) { syncRepository.pair(info) } }
+                .onSuccess { cfg ->
+                    _syncUi.update {
+                        it.copy(
+                            busy = false,
+                            message = "配对成功：${cfg.baseUrl}\n设备号 ${cfg.deviceId}"
+                        )
+                    }
+                    refreshSyncState()
+                    SyncScheduler.syncNow(app)
+                }
+                .onFailure { e ->
+                    Log.w("SyncPair", "配对失败", e)
+                    _syncUi.update {
+                        it.copy(
+                            busy = false,
+                            message = "配对失败：${e.message ?: e.javaClass.simpleName}"
+                        )
+                    }
+                    refreshSyncState()
+                }
+        }
+    }
+
+    fun testSyncConnection() {
+        viewModelScope.launch {
+            _syncUi.update { it.copy(busy = true) }
+            runCatching { withContext(Dispatchers.IO) { syncRepository.health() } }
+                .onSuccess { h ->
+                    _syncUi.update {
+                        it.copy(
+                            busy = false,
+                            serverTime = h.optString("time"),
+                            message = "连接成功：服务端已收 ${h.optInt("pendingScans", 0)} 条记录\n" +
+                                "服务器时间 ${h.optString("time")}"
+                        )
+                    }
+                    refreshSyncState()
+                }
+                .onFailure { e ->
+                    _syncUi.update {
+                        it.copy(busy = false, message = "连接失败：${e.message ?: "网络不通"}")
+                    }
+                    refreshSyncState()
+                }
+        }
+    }
+
+    fun syncNow() {
+        viewModelScope.launch {
+            _syncUi.update { it.copy(busy = true) }
+            runCatching { withContext(Dispatchers.IO) { syncRepository.syncOnce() } }
+                .onSuccess { r ->
+                    val msg = when (r) {
+                        is SyncRepository.Result.NotPaired -> "尚未配对，请先扫描电脑上的配对码"
+                        is SyncRepository.Result.Ok ->
+                            "同步完成：上传 ${r.pushed} 条（重复 ${r.duplicated} 条）" +
+                                if (r.pulled > 0) "，收到任务 ${r.pulled} 个" else ""
+                    }
+                    _syncUi.update { it.copy(busy = false, message = msg) }
+                    refreshSyncState()
+                }
+                .onFailure { e ->
+                    _syncUi.update {
+                        it.copy(busy = false, message = "同步失败：${e.message ?: "网络不通"}")
+                    }
+                    refreshSyncState()
+                }
+        }
+    }
+
+    fun unpairSync() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { syncRepository.unpair() }
+            _syncUi.update { it.copy(paired = false, baseUrl = "", serverTime = "", message = "已解除配对") }
+            refreshSyncState()
+        }
+    }
+
+    fun clearSyncMessage() {
+        _syncUi.update { it.copy(message = null) }
     }
 
     // ==================== 出库扫码：设置阶段 ====================
@@ -665,6 +835,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (rec.containerId != container.id) return@withLock
                 if (rec.deletedAt != null) return@withLock
                 recordDao.softDeleteById(recordId, Date())
+                    .also { SyncScheduler.requestSync(app) }
                 pushOp(RecordOp(RecordOp.Kind.DELETE, listOf(recordId)))
                 alarm.stop()
                 refreshActiveCounts()
@@ -679,6 +850,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             outboundMutex.withLock {
                 applyOp(op, isUndo = true)
+                SyncScheduler.requestSync(app)
                 redoStack.addLast(op)
                 syncUndoState()
                 refreshActiveCounts()
@@ -693,6 +865,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             outboundMutex.withLock {
                 applyOp(op, isUndo = false)
+                SyncScheduler.requestSync(app)
                 undoStack.addLast(op)
                 syncUndoState()
                 refreshActiveCounts()
@@ -707,6 +880,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             outboundMutex.withLock {
                 val rec = recordDao.getById(recordId) ?: return@withLock
                 recordDao.restoreIds(listOf(recordId))
+                SyncScheduler.requestSync(app)
                 refreshActiveCounts()
                 syncRecordFiles(listOf(pairOf(rec)))
             }
@@ -720,6 +894,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val recs = recordDao.getTrash()
                 if (recs.isEmpty()) return@withLock
                 recordDao.restoreAll()
+                SyncScheduler.requestSync(app)
                 refreshActiveCounts()
                 syncRecordFiles(recs.map { pairOf(it) })
             }
@@ -846,6 +1021,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     val recordId = recordDao.insert(record)
 
+                    // WiFi 同步（v1.8.0）：5 秒合并触发一次上传；未配对时 Worker 自动跳过
+                    SyncScheduler.requestSync(app)
+
                     // 本枪进「撤回」栈（撤回可撤销本次扫描）
                     pushOp(RecordOp(RecordOp.Kind.INSERT, listOf(recordId)))
 
@@ -941,6 +1119,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 app.database.withTransaction {
                     groups.forEach { recordDao.softDeleteGroup(it.containerId, it.dayLabel, now) }
                 }
+                SyncScheduler.requestSync(app)
                 alarm.stop()
                 refreshActiveCounts()
                 syncRecordFiles(groups.map { Triple(it.containerId, it.containerNo, it.dayLabel) })

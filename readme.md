@@ -2,7 +2,7 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回。
 
-**当前版本：v1.7.5（versionCode 23，数据库 v13）** ｜ 状态：签名体系已就绪，现场机已运行 v1.7.x 正式签名包（debug / release 同钥匙，可无缝互装）
+**当前版本：v1.8.0（versionCode 24，数据库 v14）** ｜ 状态：签名体系已就绪；v1.8.0 新增可选 WiFi 同步（局域网，未配对不影响扫码）
 
 ## 操作指南
 
@@ -47,6 +47,15 @@
       每条规则可设 可重复扫 / 计入统计 / 查历史串号 / 忽略；供设置页多选（选择弹窗以型号名称为主显示）
       导入 / 导出 XLSX（型号名称 / 前缀 / 四个开关），便于拷到其他 PDA 维护
 ```
+
+## WiFi 同步（v1.8.0，可选）
+
+- 首页新增「WiFi 同步」：配对后，扫码记录自动回传电脑（5 秒合并；后台每 15 分钟补传），断网照常扫码、恢复后补传。
+- 配对：电脑运行同步服务 → 生成配对二维码 → PDA「扫描配对码」；扫码枪不支持二维码时用「手动输入」`电脑IP:8000#令牌`。
+- 同步内容：扫码记录（含正常/串号/重复/超量/辅助、软删除/撤回状态）；uid 幂等，重复上传不翻倍。
+- PC 端源码：`docs/WiFi同步/pc-server/`（FastAPI + SQLite，纯局域网、无云服务）；部署见该目录 README 与 `docs/WiFi同步/03-电脑端实施步骤.md`。
+- 安全：仅局域网 HTTP + `X-Sync-Token`；未配对/服务不可达时完全不影响扫码；设置页可「解除配对」。
+- P2（电脑下发装柜任务到 PDA 收件箱）接口已预留，界面待下一波实现。
 
 ## 校验与报警逻辑（出库扫码）
 
@@ -124,7 +133,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序 + 流水号范围/末尾位数 + 语音读法 + 规则表解析，32 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 6 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析，37 项单测）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 7 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在**仓库外** `E:\saoma-keystore\zhuanggui-release.jks`；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装（需 `run-as` 排障时装 debug）
 - ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份（备份说明随 keystore 目录）；**换签名身份 = 设备需卸载重装**（先快照、装后用快照回灌，见 `子项目计划.md`）——本机 2026-10-19 已完成一次性签名切换（快照 → 卸载 → 装新签名包 → 回灌验证，数据零丢失），此后 debug / release 互装均无需卸载
@@ -135,17 +144,19 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 
 ## 技术栈与数据库
 
-- Kotlin + Jetpack Compose（单 Activity 导航）；Room（带版本迁移）；Apache POI（仅规则源导入解析 .xlsx/.xls 用）；无后端、无网络，多台 PDA 各自独立
+- Kotlin + Jetpack Compose（单 Activity 导航）；Room（带版本迁移）；Apache POI（规则源 .xlsx 解析）；OkHttp + WorkManager（可选 WiFi 同步）；无云服务，默认纯离线，多台 PDA 各自独立
 
-数据库 v13（`data/AppDatabase.kt`）：
+数据库 v14（`data/AppDatabase.kt`）：
 
 ```
 load_containers  装柜会话（柜号唯一：同号柜永远复用同一行；id 关联规则与记录）
 load_rules       本柜条码规则快照（prefix / allowDuplicate / countEnabled / checkHistory /
                  serialMin / serialMax / serialTailLen / ignoreRepeat）
-scan_records     扫码记录（每扫一码一条，含串号/重复/超量/辅助完整留痕；deletedAt = 软删除）
+scan_records     扫码记录（含 deletedAt 软删除；v14 加 uid 同步幂等键 / syncedAt 待传标记）
 rule_models      规则库型号（name 唯一；允许空型号，v13）
 rule_library     规则库规则（prefix 唯一 + name 型号 + 四个开关）
+sync_state       同步配置与游标（serverUrl / token / deviceId / lastTaskRev / lastSyncAt / lastError，v14）
+sync_inbox       电脑下发的装柜任务（柜号唯一；P2 装载，v14）
 ```
 
 ```
@@ -155,8 +166,9 @@ rule_library     规则库规则（prefix 唯一 + name 型号 + 四个开关）
      v9→v10 scan_records 加 operatorId；v10→v11 load_rules 加 serialMin/serialMax/ignoreRepeat、
      rule_library 加四个规则开关（历史行取旧行为默认值）；
      v11→v12 load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 前缀后整段）；
-     v12→v13 新增 rule_models（型号表），现有规则名称去重回填
-迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9、9→10、10→11、11→12、12→13 单步 + 5→13 全链，真机运行 6 项）
+     v12→v13 新增 rule_models（型号表），现有规则名称去重回填；
+     v13→v14 scan_records 加 uid（历史回填随机值 + 唯一索引）/syncedAt，新增 sync_state / sync_inbox
+迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9、9→10、10→11、11→12、12→13、13→14 单步 + 5→14 全链，真机运行 7 项）
 ```
 
 `ScanResult`：`OK / NOT_IN_LIST（历史遗留）/ OVER_LIMIT / SERIAL_MISMATCH / DUPLICATE / AUX`
@@ -188,6 +200,7 @@ app/src/main/java/com/zhuanggui/pda/
 
 ## 版本历史
 
+- **v1.8.0（versionCode 24，DB v14）**：可选 WiFi 同步（P0 配对 + P1 扫码记录回传）——首页「WiFi 同步」入口；电脑端同步服务（FastAPI + SQLite，源码 `docs/WiFi同步/pc-server/`，运行目录 `E:\saoma-sync`，纯局域网）；二维码/手输配对（配对时直接校验 token）；扫码后 5 秒合并自动上传、后台 15 分钟补传、断网缓存恢复后补传；软删除/撤回状态同步，`uid` 幂等（重复上传不翻倍）；设置页显示待传条数、服务器时间、上次同步/错误，可测试连接/立即同步/解除配对；未配对或服务不可达完全不影响扫码；DB v13→v14（scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox）；单测 37 项、迁移测试 7 项
 - **v1.7.5（versionCode 23，DB v13）**：规则库「型号优先」维护——先「新增型号」，再在型号行点「＋ 添加规则」逐个添加前缀；列表默认折叠，只显示型号名称与规则条数，点型号行展开规则（可改名/删除型号，删除型号会连同其下规则删除）；导出改为 **XLSX**（型号名称 / 前缀 / 四个开关，是/否），列宽/表头已设置，导入按表头自动识别型号在前或前缀在前的两种格式；空型号可导出/导入；DB v12→v13 新增 `rule_models`（现有规则名称去重回填），历史规则行为不变；单测 32 项、迁移测试 6 项通过
 - **v1.7.4（versionCode 22，DB v12）**：规则库导出——「规则库」页新增「导出」，把全部规则写成与导入兼容的 TSV（前缀 / 名称型号 / 可重复扫 / 计入统计 / 查历史串号 / 忽略，UTF-8 带 BOM），保存到 `/sdcard/ZhuangGui/规则库/规则库_yyyyMMdd_HHmmss.tsv`；拷到其他 PDA 后用「导入」选择该文件即可完整还原（开关列随文件生效；普通两列文件覆盖导入时保留库内原开关）。导入端支持 .tsv，并兼容 1/0、是/否、true/false 的开关写法；新增解析单测 4 项（共 29 项）
 - **v1.7.3（versionCode 21，DB v12）**：「从规则库选择」弹窗改为**规则名称（型号）主显示**、前缀与开关作为次要细则（名称不一定记得住，方便按名称查找/选择）；过滤框提示改为「过滤型号/前缀」；名称留空时仍以前缀为主显示

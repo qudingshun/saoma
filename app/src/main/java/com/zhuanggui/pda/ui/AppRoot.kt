@@ -16,6 +16,7 @@ import com.zhuanggui.pda.ui.screen.OutboundScanScreen
 import com.zhuanggui.pda.ui.screen.OutboundSetupScreen
 import com.zhuanggui.pda.ui.screen.RecordsScreen
 import com.zhuanggui.pda.ui.screen.RulesScreen
+import com.zhuanggui.pda.ui.screen.SyncSettingsScreen
 import com.zhuanggui.pda.ui.screen.TrashScreen
 import kotlinx.coroutines.launch
 
@@ -26,6 +27,7 @@ object Routes {
     const val RECORDS = "records"
     const val RULE_LIBRARY = "rule_library"
     const val TRASH = "trash"
+    const val SYNC = "sync"
 }
 
 @Composable
@@ -41,8 +43,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         // ---------- 首页 ----------
         composable(Routes.HOME) {
             val lastContainerNo by vm.lastContainerNo.collectAsStateWithLifecycle()
+            val syncPending by vm.syncPending.collectAsStateWithLifecycle()
             HomeScreen(
                 lastContainerNo = lastContainerNo,
+                syncPending = syncPending,
                 onOutbound = {
                     vm.resetOutboundSetup()
                     navController.navigate(Routes.OUTBOUND_SETUP)
@@ -53,7 +57,11 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     vm.onContainerNoChange(no)
                     navController.navigate(Routes.OUTBOUND_SETUP)
                 },
-                onRecords = { navController.navigate(Routes.RECORDS) }
+                onRecords = { navController.navigate(Routes.RECORDS) },
+                onSync = {
+                    vm.refreshSyncState()
+                    navController.navigate(Routes.SYNC)
+                }
             )
         }
 
@@ -199,6 +207,25 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onImport = { uri -> vm.importRuleSource(context, uri) },
                 onExport = vm::exportRuleLibrary,
                 onBack = { navController.popBackStack() }
+            )
+        }
+
+        // ---------- WiFi 同步（v1.8.0） ----------
+        composable(Routes.SYNC) {
+            val syncUi by vm.syncUi.collectAsStateWithLifecycle()
+            val pending by vm.syncPending.collectAsStateWithLifecycle()
+            SyncSettingsScreen(
+                state = syncUi,
+                pending = pending,
+                onBack = { navController.popBackStack() },
+                onStartPairing = vm::startPairing,
+                onCancelPairing = vm::cancelPairing,
+                onPairManual = { text -> vm.pairWithCode(text) },
+                onTest = vm::testSyncConnection,
+                onSyncNow = vm::syncNow,
+                onUnpair = vm::unpairSync,
+                onClearMessage = vm::clearSyncMessage,
+                onRefresh = vm::refreshSyncState
             )
         }
     }

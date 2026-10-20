@@ -75,7 +75,12 @@ data class LoadRule(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("containerId"), Index("barcode")]   // barcode 索引（v9）：查重 / 查历史串号提速
+    indices = [
+        Index("containerId"),
+        Index("barcode"),                                  // v9：查重 / 查历史串号提速
+        Index(value = ["uid"], unique = true),             // v14：同步幂等键
+        Index("syncedAt")                                  // v14：取待传记录
+    ]
 )
 data class ScanRecord(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -86,7 +91,9 @@ data class ScanRecord(
     val result: ScanResult,
     val scannedAt: Date = Date(),
     val deletedAt: Date? = null,              // 软删除时间（进回收站）；null = 有效记录
-    val operatorId: String = ""               // 操作员工号（v10；空 = 未填）
+    val operatorId: String = "",              // 操作员工号（v10；空 = 未填）
+    val uid: String = java.util.UUID.randomUUID().toString(), // 同步唯一键（v14）
+    val syncedAt: Date? = null                // 已上传时间；null = 待上传（v14）
 )
 
 /**
