@@ -45,12 +45,12 @@ object FileExporter {
     private fun fmtDate(d: Date): String = dayFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
     private fun fmtTime(d: Date): String = timeFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
 
-    private const val HEADER = "时间\t柜号\t条码\t完整码\t结果\n"
+    private const val HEADER = "时间\t柜号\t条码\t完整码\t结果\t操作员\n"
 
     /** 装柜完成汇总：单文件累积，每装齐一柜追加一行 */
     private const val SUMMARY_DIR = "ZhuangGui"
     private const val SUMMARY_FILE = "装柜完成汇总.tsv"
-    private const val SUMMARY_HEADER = "完成时间\t柜号\t计划数量\t正常\t串号\t重复\t超量\t记录总数\n"
+    private const val SUMMARY_HEADER = "完成时间\t柜号\t计划数量\t正常\t串号\t重复\t超量\t记录总数\t操作员\n"
 
     /** 根目录（PDA 文件管理器里直接可找） */
     fun rootDir(): File = File(Environment.getExternalStorageDirectory(), ROOT_DIR)
@@ -96,6 +96,7 @@ object FileExporter {
         append('\t'); append(record.barcode)
         append('\t'); append(record.fullCode)
         append('\t'); append(resultText(record.result))
+        append('\t'); append(record.operatorId)
         append('\n')
     }
 
@@ -118,10 +119,27 @@ object FileExporter {
         val file = File(dir, "${safeName(record.containerNo)}.tsv")
         if (!file.exists()) {
             file.outputStream().use { it.write("\uFEFF$HEADER".toByteArray(Charsets.UTF_8)) }
+        } else {
+            upgradeHeaderIfNeeded(file)
         }
         FileOutputStream(file, true).use { it.write(lineOf(record).toByteArray(Charsets.UTF_8)) }
         true
     }.getOrDefault(false)
+
+    /**
+     * v1.6.0：旧版记录文件（表头无「操作员」列）首次追加时升级表头。
+     * 数据行原样保留，老行末尾补一个空操作员列（不丢任何已扫记录）。
+     */
+    private fun upgradeHeaderIfNeeded(file: File) {
+        val firstLine = runCatching {
+            file.bufferedReader(Charsets.UTF_8).use { it.readLine() }
+        }.getOrNull() ?: return
+        if (firstLine.removePrefix("\uFEFF") == HEADER.trimEnd('\n')) return
+        val lines = file.readLines(Charsets.UTF_8)
+        val sb = StringBuilder("\uFEFF$HEADER")
+        lines.drop(1).forEach { sb.append(it).append('\t').append('\n') }
+        file.outputStream().use { it.write(sb.toString().toByteArray(Charsets.UTF_8)) }
+    }
 
     /** 装柜完成汇总文件在文件管理器里的展示路径 */
     fun summaryDisplayPath(): String = "/sdcard/$SUMMARY_DIR/$SUMMARY_FILE"
@@ -138,7 +156,8 @@ object FileExporter {
         mismatch: Int,
         duplicate: Int,
         over: Int,
-        totalRecords: Int
+        totalRecords: Int,
+        operatorId: String
     ): Boolean = runCatching {
         val dir = File(Environment.getExternalStorageDirectory(), SUMMARY_DIR)
         if (!dir.exists() && !dir.mkdirs()) return false
@@ -155,6 +174,7 @@ object FileExporter {
             append('\t'); append(duplicate)
             append('\t'); append(over)
             append('\t'); append(totalRecords)
+            append('\t'); append(operatorId)
             append('\n')
         }
         FileOutputStream(file, true).use { it.write(line.toByteArray(Charsets.UTF_8)) }

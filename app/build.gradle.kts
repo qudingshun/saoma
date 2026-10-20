@@ -16,13 +16,15 @@ val keystoreProps = Properties().apply {
 android {
     namespace = "com.zhuanggui.pda"
     compileSdk = 35
+    // 本机 SDK 已装的是 35.0.1（AGP 默认找 35.0.0；android.builder.sdkDownload=false 不会自动补装）
+    buildToolsVersion = "35.0.1"
 
     defaultConfig {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.5.9"
+        versionCode = 17
+        versionName = "1.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -16,8 +16,9 @@ import org.junit.runner.RunWith
  *
  * 覆盖：
  *  - v8 → v9：新增 scan_records(barcode) 索引（用导出的 8.json 建库，数据保留校验）
- *  - v5 → v9 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→7→8→9 并按 9.json 校验。
+ *  - v9 → v10：scan_records 加 operatorId 列（用导出的 9.json 建库，默认值校验）
+ *  - v5 → v10 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→10 并按 10.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -65,9 +66,38 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v9 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v9（有 schema）→ v10：加 operatorId 列、历史记录默认空串、数据不丢 */
     @Test
-    fun migrate5To9_fullChain() {
+    fun migrate9To10_addsOperatorId() {
+        helper.createDatabase(TEST_DB, 9).use { db ->
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-9TO10', 10, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL(
+                "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt, deletedAt) " +
+                    "VALUES (1, 'C-9TO10', 'XYZ0001', 'C-9TO10，XYZ0001', 'OK', 1730000000000, NULL)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 10, true, AppDatabase.ALL_MIGRATIONS[8])
+        try {
+            db.query("SELECT COUNT(*) FROM scan_records").use { c ->
+                c.moveToFirst()
+                assertEquals(1, c.getInt(0))
+            }
+            db.query("SELECT operatorId FROM scan_records LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals("", c.getString(0))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v10 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To10_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -115,23 +145,23 @@ class MigrationTest {
             // 种子数据：1 柜 + 1 规则 + 2 条扫码记录（v5 时还没有 deletedAt / 双码机三列）
             db.execSQL(
                 "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
-                    "VALUES ('C-5TO9', 100, 1730000000000, 'ACTIVE')"
+                    "VALUES ('C-5TO10', 100, 1730000000000, 'ACTIVE')"
             )
             db.execSQL("INSERT INTO load_rules (containerId, prefix) VALUES (1, 'ABC')")
             db.execSQL(
                 "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt) " +
-                    "VALUES (1, 'C-5TO9', 'ABC0001', 'C-5TO9，ABC0001', 'OK', 1730000000000)"
+                    "VALUES (1, 'C-5TO10', 'ABC0001', 'C-5TO10，ABC0001', 'OK', 1730000000000)"
             )
             db.execSQL(
                 "INSERT INTO scan_records (containerId, containerNo, barcode, fullCode, result, scannedAt) " +
-                    "VALUES (1, 'C-5TO9', 'ABC0002', 'C-5TO9，ABC0002', 'OK', 1730000001000)"
+                    "VALUES (1, 'C-5TO10', 'ABC0002', 'C-5TO10，ABC0002', 'OK', 1730000001000)"
             )
             db.version = 5
         }
 
-        // 跑 5→6→7→8→9（起点无 schema JSON，drop 校验传 false），结束后按 9.json 全量校验
+        // 跑 5→6→…→10（起点无 schema JSON，drop 校验传 false），结束后按 10.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 9, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 8)
+            TEST_DB, 10, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 9)
         )
         try {
             // 数据保留
@@ -155,6 +185,11 @@ class MigrationTest {
                 "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'index_scan_records_barcode'"
             ).use { c ->
                 assertTrue(c.moveToFirst())
+            }
+            // v10 新增 operatorId 列：旧记录默认空串
+            db.query("SELECT operatorId FROM scan_records LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals("", c.getString(0))
             }
         } finally {
             db.close()

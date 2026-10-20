@@ -48,7 +48,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     navController.navigate(Routes.OUTBOUND_SETUP)
                 },
                 onContinueLast = { no ->
-                    // 一键继续：复用设置页「柜号变更」（自动载入原规则 + 已扫码数量，计划装柜数量以已存计划回填）
+                    // 一键继续：复用设置页「柜号变更」（自动载入原规则 + 已扫码数量；计划留空则按该柜已存计划继续）
                     vm.resetOutboundSetup()
                     vm.onContainerNoChange(no)
                     navController.navigate(Routes.OUTBOUND_SETUP)
@@ -66,6 +66,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 library = ruleLibrary,
                 onContainerNo = vm::onContainerNoChange,
                 onTotal = vm::onTotalQuantityChange,
+                onOperatorId = vm::onOperatorIdChange,
+                onScanTarget = vm::onSetupScanTarget,
                 onRuleInput = vm::onRuleInputChange,
                 onRuleAllowDup = vm::onRuleAllowDupChange,
                 onRuleCount = vm::onRuleCountChange,

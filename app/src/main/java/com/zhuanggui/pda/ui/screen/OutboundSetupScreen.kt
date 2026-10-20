@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,13 +52,15 @@ import androidx.compose.foundation.lazy.items
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.ui.OutboundSetupState
 import com.zhuanggui.pda.ui.RuleSpec
+import com.zhuanggui.pda.ui.SetupScanTarget
 
 /**
  * 出库扫码设置页（整页固定布局，规则列表在固定区域内部滚动）：
  *  - 柜号 + 计划装柜数量（并列一行，窄框；计划 = 本批目标件数，空/0 = 不限）
- *  - 已扫码数量：命中「今天已有装柜记录」的柜号时只读展示（自动统计，无法手改）
- *    · 未装齐 → 继续扫码将接着计数，扫满计划数量时提示装柜完成
- *    · 已装齐 → 再扫码提示超量（如需补装改大计划装柜数量）
+ *    · v1.6.0：计划只由人工填写，App 不再自动改写输入框（退出再进入不丢失、不被覆盖）
+ *    · 命中「今天已扫码」的柜号且计划留空 → 装柜时按该柜已存计划继续（提示条与占位符可见）
+ *  - 已扫码数量（= 已装柜数量）：常显只读，自动统计（今天正常数），无法手改
+ *  - 操作员工号：选填（扫工牌或手输）；工号栏聚焦时扫码键填入工号（替换），其余位置填入规则栏
  *  - 条码规则：按扫描键扫码 → 完整条码自动填入规则栏（人工删减成前缀）；也可手动录入、从规则库选择、规则库管理
  *  - 规则说明：固定小窗，内部下拉滚动查看
  *  - 规则列表：固定区域，内部下拉滚动；每条可勾「可重复扫」「计入统计」「查历史串号」
@@ -69,6 +72,8 @@ fun OutboundSetupScreen(
     library: List<RuleLibEntry>,
     onContainerNo: (String) -> Unit,
     onTotal: (String) -> Unit,
+    onOperatorId: (String) -> Unit,
+    onScanTarget: (SetupScanTarget) -> Unit,
     onRuleInput: (String) -> Unit,
     onRuleAllowDup: (Boolean) -> Unit,
     onRuleCount: (Boolean) -> Unit,
@@ -113,13 +118,15 @@ fun OutboundSetupScreen(
             }
 
             if (state.scannedQuantity > 0) {
-                val plan = state.totalQuantity.toIntOrNull() ?: 0
+                // 计划标注：输入框填写优先；留空 = 用该柜已存计划（装柜时按它继续，不改写输入框）
+                val plan = state.totalQuantity.toIntOrNull() ?: state.storedPlan
+                val planLabel = if (state.totalQuantity.isBlank()) "已存计划" else "计划"
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF9C4))) {
                     Text(
                         if (plan > 0 && state.scannedQuantity >= plan)
-                            "该柜号今天已装齐（已扫码 ${state.scannedQuantity} / 计划 $plan）：再扫码将提示超量；如需补装请先改大「计划装柜数量」"
+                            "该柜号今天已装齐（已扫码 ${state.scannedQuantity} / $planLabel $plan）：再扫码将提示超量；如需补装请先改大「计划装柜数量」"
                         else "该柜号今天已扫码 ${state.scannedQuantity} 件" +
-                            if (plan > 0) "（计划 $plan）：继续扫码将接着计数，扫满计划数量时提示装柜完成"
+                            if (plan > 0) "（$planLabel $plan）：继续扫码将接着计数，扫满计划数量时提示装柜完成"
                             else "（计划不限）：继续扫码将接着计数",
                         Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         fontSize = 13.sp
@@ -145,12 +152,61 @@ fun OutboundSetupScreen(
                     value = state.totalQuantity,
                     onValueChange = onTotal,
                     label = { Text("计划装柜数量", fontSize = 14.sp) },
-                    placeholder = { Text("0 = 不限") },
+                    placeholder = {
+                        Text(
+                            if (state.scannedQuantity > 0 && state.storedPlan > 0)
+                                "留空 = 已存计划 ${state.storedPlan}"
+                            else "0/空 = 不限",
+                            fontSize = 12.sp
+                        )
+                    },
                     singleLine = true,
                     textStyle = TextStyle(fontSize = 15.sp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
+            }
+
+            // ---------- 操作员工号（选填，扫工牌/手输）+ 已扫码数量（只读） ----------
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = state.operatorId,
+                    onValueChange = onOperatorId,
+                    label = { Text("操作员工号", fontSize = 14.sp) },
+                    placeholder = { Text("选填，扫工牌/手输", fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = TextStyle(fontSize = 15.sp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged {
+                            // 焦点路由：工号栏聚焦时扫码填入工号（替换），其余位置填规则栏
+                            onScanTarget(if (it.isFocused) SetupScanTarget.OPERATOR else SetupScanTarget.RULE)
+                        }
+                )
+                // 已扫码数量（= 已装柜数量）：自动统计，常显只读（无法手改）
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(56.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .border(0.5.dp, Color(0xFFD0D0D0), RoundedCornerShape(4.dp))
+                        .background(Color(0xFFF7F7F7))
+                        .padding(horizontal = 10.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Column {
+                        Text("已扫码数量（今天）", fontSize = 10.sp, color = Color(0xFF888888))
+                        Text(
+                            "${state.scannedQuantity} 件",
+                            fontSize = 15.sp,
+                            color = if (state.scannedQuantity > 0) Color(0xFF2E7D32) else Color(0xFF555555),
+                            fontWeight = if (state.scannedQuantity > 0) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
             }
 
             // ---------- 条码规则 ----------

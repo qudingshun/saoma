@@ -21,7 +21,7 @@ import com.zhuanggui.pda.data.entity.ScanRecord
     entities = [
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -168,10 +168,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v9 → v10：扫码记录加「操作员工号」。
+         *  - operatorId：扫描时的工号（设置页选填）；历史记录默认 '' = 未填
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE scan_records ADD COLUMN operatorId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
         )
     }
 }

@@ -151,7 +151,8 @@ private fun TrashRow(r: ScanRecord, onRestore: () -> Unit) {
                 )
             }
             Text(
-                "删除于 ${deletedText(r)} · 柜号：${r.containerNo}",
+                "删除于 ${deletedText(r)} · 柜号：${r.containerNo}" +
+                    if (r.operatorId.isNotBlank()) " · 操作员：${r.operatorId}" else "",
                 fontSize = 12.sp, color = Color.Gray
             )
         }

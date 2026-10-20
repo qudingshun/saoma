@@ -392,7 +392,8 @@ private fun RecordItem(r: ScanRecord) {
             )
         }
         Text(
-            "${timeText(r)}　柜号：${r.containerNo}",
+            "${timeText(r)}　柜号：${r.containerNo}" +
+                if (r.operatorId.isNotBlank()) "　操作员：${r.operatorId}" else "",
             fontSize = 12.sp, color = Color.Gray
         )
     }

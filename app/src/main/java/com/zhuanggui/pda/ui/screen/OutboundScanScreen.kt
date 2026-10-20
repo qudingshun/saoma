@@ -341,10 +341,18 @@ fun OutboundScanScreen(
                         }",
                         fontSize = 12.sp, color = Color.Gray
                     )
-                    Text(
-                        "计划装柜数量：${if (state.total > 0) state.total.toString() else "不限"}",
-                        fontSize = 14.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "计划装柜数量：${if (state.total > 0) state.total.toString() else "不限"}",
+                            fontSize = 14.sp
+                        )
+                        if (state.operatorId.isNotBlank()) {
+                            Text(
+                                "　操作员：${state.operatorId}",
+                                fontSize = 12.sp, color = Color.Gray
+                            )
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "已扫码数量：${state.okCount}",

@@ -54,6 +54,7 @@ data class LoadRule(
 /**
  * 扫码记录：每扫一码写一条（含串号/重复/超量/辅助码，完整留痕），同时自动落盘 TSV 文件。
  * fullCode = 柜号 + "，" + 条码（逗号拼接，按需求约定）。
+ * operatorId = 扫描时的操作员工号（设置页选填；空 = 未填），用于追溯（v1.6.0）。
  */
 @Entity(
     tableName = "scan_records",
@@ -75,7 +76,8 @@ data class ScanRecord(
     val fullCode: String,                     // 柜号，条码
     val result: ScanResult,
     val scannedAt: Date = Date(),
-    val deletedAt: Date? = null               // 软删除时间（进回收站）；null = 有效记录
+    val deletedAt: Date? = null,              // 软删除时间（进回收站）；null = 有效记录
+    val operatorId: String = ""               // 操作员工号（v10；空 = 未填）
 )
 
 /**

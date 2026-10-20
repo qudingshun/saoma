@@ -41,6 +41,9 @@ import java.util.Locale
 /** 出库扫码当前所处阶段 */
 enum class OutboundStage { SETUP, SCANNING }
 
+/** 设置页扫码键的填入口：工号栏聚焦时填工号（替换），否则填规则栏（原行为） */
+enum class SetupScanTarget { RULE, OPERATOR }
+
 /** 本柜条码规则（双码机选项）：
  *  - [allowDuplicate] 允许重复扫：同码可反复扫不报“重复”（双码机的固定码）
  *  - [countEnabled] 计入统计：不勾选 = 辅助码（AUX），只留痕不计数、不占计划装柜数量
@@ -53,16 +56,18 @@ data class RuleSpec(
     val checkHistory: Boolean = false
 )
 
-/** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」） */
+/** 出库扫码：设置阶段状态（v1.5.9：数量拆分为「计划装柜数量」+「已扫码数量」；v1.6.0：计划字段不再被自动改写） */
 data class OutboundSetupState(
     val containerNo: String = "",
-    val totalQuantity: String = "",            // 计划装柜数量（留空/0 = 不限）
+    val totalQuantity: String = "",            // 计划装柜数量（只由人工填写；留空且命中今天已扫码的柜号 = 按该柜已存计划继续装）
     val rules: List<RuleSpec> = emptyList(),   // 条码规则（前缀），拼装柜可多条
     val ruleInput: String = "",
     val ruleAllowDup: Boolean = false,         // 新增规则时勾选：可重复扫
     val ruleCount: Boolean = true,             // 新增规则时勾选：计入统计
     val ruleCheckHistory: Boolean = false,     // 新增规则时勾选：查历史串号
-    val scannedQuantity: Int = 0               // 今天已扫码数量（命中今天已有记录的柜号时自动带出，只读展示）
+    val scannedQuantity: Int = 0,              // 今天已扫码数量（只读展示，自动统计；= 已装柜数量）
+    val storedPlan: Int = 0,                   // 命中柜号的已存计划装柜数量（0 = 无/不限；仅用于提示与留空续装，不回填输入框）
+    val operatorId: String = ""                // 操作员工号（选填：扫工牌或手输；随本批记录落库落盘）
 )
 
 /** 出库扫码：扫码阶段状态 */
@@ -70,6 +75,7 @@ data class OutboundScanState(
     val activeContainer: LoadContainer? = null,
     val rules: List<RuleSpec> = emptyList(),
     val total: Int = 0,                        // 计划装柜数量（0 = 不限）
+    val operatorId: String = "",               // 操作员工号（进扫码会话时快照；随每条记录落库落盘）
     val okCount: Int = 0,                      // 正常件数
     val mismatchCount: Int = 0,                // 串号
     val duplicateCount: Int = 0,               // 重复
@@ -134,6 +140,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _setup = MutableStateFlow(OutboundSetupState())
     val setup: StateFlow<OutboundSetupState> = _setup.asStateFlow()
 
+    /** 设置页扫码键填入口（工号栏聚焦 = OPERATOR，其余 = 规则栏）；由界面焦点变化驱动 */
+    private val _setupScanTarget = MutableStateFlow(SetupScanTarget.RULE)
+
+    /** 操作员工号：记住上次填写（首页进入设置页时预填，避免每柜重输） */
+    private val operatorPrefs = application.getSharedPreferences("operator_prefs", Context.MODE_PRIVATE)
+
     private val _outbound = MutableStateFlow(OutboundScanState())
     val outbound: StateFlow<OutboundScanState> = _outbound.asStateFlow()
 
@@ -194,9 +206,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // 装柜进行中 → 正常校验
                         _outboundStage.value == OutboundStage.SCANNING &&
                             _outbound.value.activeContainer != null -> handleOutboundScan(barcode)
-                        // 设置页 → 扫码填入规则栏（完整码，人工删减成前缀）
+                        // 设置页 → 扫码填入：工号栏聚焦时填工号（替换），否则填规则栏（完整码，人工删减成前缀）
                         _outboundStage.value == OutboundStage.SETUP ->
-                            _setup.update { it.copy(ruleInput = barcode.trim()) }
+                            if (_setupScanTarget.value == SetupScanTarget.OPERATOR) onOperatorIdChange(barcode)
+                            else _setup.update { it.copy(ruleInput = barcode.trim()) }
                         // 其余场景忽略（老的 Excel 工单流程已下架，见 archive/）
                     }
                 } catch (t: Throwable) {
@@ -212,17 +225,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         // 柜号只允许字母+数字
         val clean = v.filter { it.isLetterOrDigit() }.uppercase()
         _setup.update {
-            it.copy(containerNo = clean, scannedQuantity = if (clean.isBlank()) 0 else it.scannedQuantity)
+            it.copy(
+                containerNo = clean,
+                scannedQuantity = if (clean.isBlank()) 0 else it.scannedQuantity,
+                storedPlan = if (clean.isBlank()) 0 else it.storedPlan
+            )
         }
         scheduleContainerLookup(clean)
     }
 
     /**
      * 柜号输入后（防抖 150ms）查询已有柜号：
-     *  - 柜号「今天」已有装柜记录（已删除的不参与统计）→ 自动载入原规则 + 已存计划装柜数量，
-     *    并带出「已扫码数量」（今天已装正常数，只读展示）→ 继续扫码从已扫数接着计数，
-     *    扫满计划数量时提示装柜完成；已装齐再扫则提示超量（如需补装改大计划装柜数量）
-     *  - 其余情况 → 清空「已扫码数量」展示（保持手填计划与已有规则）
+     *  - 柜号「今天」已有装柜记录（已删除的不参与统计）→ 自动载入原规则，
+     *    并带出「已扫码数量」（今天已装正常数，只读展示）= 已装柜数量 → 继续扫码从已扫数接着计数
+     *  - v1.6.0：计划装柜数量输入框只由人工填写，查询不再改写它；命中柜号时只记录「已存计划」
+     *    （storedPlan）用于提示，以及留空装柜时按已存计划继续（不改写输入框）
+     *  - 其余情况 → 清空展示值（保持人工填写的计划与已有规则）
      * 输入已变化时丢弃过期查询结果。
      */
     private fun scheduleContainerLookup(clean: String) {
@@ -233,7 +251,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val existing = containerDao.findByNo(clean)
             if (_setup.value.containerNo != clean) return@launch // 期间输入已变化，丢弃过期查询
             if (existing == null) {
-                _setup.update { s -> if (s.containerNo != clean) s else s.copy(scannedQuantity = 0) }
+                _setup.update { s ->
+                    if (s.containerNo != clean) s else s.copy(scannedQuantity = 0, storedPlan = 0)
+                }
                 return@launch
             }
             // 「今天已装数」：只算今天的有效记录（已删除的、昨天的都不参与）
@@ -247,9 +267,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     rules = rules,
                     // 已扫码数量 = 今天已装正常数（只读展示，不写入计划字段）
                     scannedQuantity = loaded,
-                    // 今天已扫过则回填已存计划（已扫码数量的拆分对象）；空壳柜号只载入规则
-                    totalQuantity = if (loaded > 0 && existing.totalQuantity > 0)
-                        existing.totalQuantity.toString() else s.totalQuantity
+                    // 已存计划：仅用于提示与留空续装（绝不回填输入框，避免"退出再进入被改写"）
+                    storedPlan = existing.totalQuantity
                 )
             }
         }
@@ -257,6 +276,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onTotalQuantityChange(v: String) {
         _setup.update { it.copy(totalQuantity = v.filter { c -> c.isDigit() }.take(6)) }
+    }
+
+    /** 操作员工号（选填）：字母+数字、自动大写、≤12 位；随每次修改持久化（下次进入预填） */
+    fun onOperatorIdChange(v: String) {
+        val clean = v.filter { it.isLetterOrDigit() }.uppercase().take(12)
+        _setup.update { it.copy(operatorId = clean) }
+        operatorPrefs.edit().putString(KEY_LAST_OPERATOR, clean).apply()
+    }
+
+    /** 设置页焦点变化：工号栏聚焦时扫码键填入工号，其余位置填入规则栏（原行为） */
+    fun onSetupScanTarget(target: SetupScanTarget) {
+        _setupScanTarget.value = target
     }
 
     fun onRuleInputChange(v: String) {
@@ -317,28 +348,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 从首页进入出库扫码设置页：整页空白（不保留上次柜号/数量/规则；扫码页「返回设置」才保留） */
+    /** 从首页进入出库扫码设置页：整页空白（不保留上次柜号/数量/规则；操作员工号预填上次填写） */
     fun resetOutboundSetup() {
         alarm.stop()
         _outboundStage.value = OutboundStage.SETUP
-        _setup.value = OutboundSetupState()
+        _setupScanTarget.value = SetupScanTarget.RULE
+        _setup.value = OutboundSetupState(
+            operatorId = operatorPrefs.getString(KEY_LAST_OPERATOR, "") ?: ""
+        )
     }
 
     /**
      * 扫码页「返回设置」：柜号 / 计划装柜数量 / 规则原样保留（无需重新选择/录入）；
-     * 「已扫码数量」同步为本会话已装数（只读展示）。
+     * 「已扫码数量」同步为本会话已装数（只读展示）；已存计划同步为本会话实际计划。
      * 若本柜已装齐（正常数 ≥ 计划装柜数量）→ 清空规则：该柜号再装按全新柜处理。
      */
     fun backToOutboundSetup() {
         alarm.stop()
         _outboundStage.value = OutboundStage.SETUP
+        _setupScanTarget.value = SetupScanTarget.RULE
         val st = _outbound.value
         if (st.activeContainer == null) return
         val done = st.total > 0 && st.okCount >= st.total
         _setup.update {
             it.copy(
                 rules = if (done) emptyList() else it.rules,
-                scannedQuantity = st.okCount
+                scannedQuantity = st.okCount,
+                storedPlan = st.total
             )
         }
     }
@@ -358,10 +394,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val already = _outboundStage.value == OutboundStage.SCANNING &&
                     _outbound.value.activeContainer?.containerNo == s.containerNo
                 if (!already) {
-                    val total = s.totalQuantity.toIntOrNull() ?: 0
+                    val typed = s.totalQuantity.trim()
+                    val typedTotal = typed.toIntOrNull() ?: 0
                     // 容器 + 规则快照同步在同一事务，避免中途失败留下半套规则
-                    val container = app.database.withTransaction {
+                    // 计划装柜数量：本次填写优先；留空且该柜今天已扫码（续装）→ 按该柜已存计划继续
+                    // （只用于本次会话，绝不改写输入框；v1.6.0 语义修正）
+                    val (container, total) = app.database.withTransaction {
                         val existing = containerDao.findByNo(s.containerNo)
+                        val total = if (typed.isEmpty() && existing != null &&
+                            recordDao.countByResultOnDay(existing.id, ScanResult.OK.name, todayLabel()) > 0
+                        ) existing.totalQuantity else typedTotal
                         val c: LoadContainer = if (existing == null) {
                             // 新柜号 → 建装柜会话（柜号唯一约束：同号柜只能复用一个会话行）
                             val id = containerDao.insert(
@@ -369,7 +411,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             )
                             LoadContainer(id = id, containerNo = s.containerNo, totalQuantity = total)
                         } else if (existing.totalQuantity != total) {
-                            // 已有柜号 → 复用会话行，不新建；计划装柜数量以本次填写为准
+                            // 已有柜号 → 复用会话行，不新建；计划装柜数量以本次为准
                             val updated = existing.copy(totalQuantity = total)
                             containerDao.update(updated)
                             updated
@@ -388,7 +430,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             )
                         }
-                        c
+                        c to total
                     }
 
                     // 换柜 = 新会话：清空撤回/前进栈（同柜继续装柜则保留）
@@ -405,6 +447,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         activeContainer = container,
                         rules = s.rules,
                         total = total,
+                        operatorId = s.operatorId,
                         okCount = counts.ok, mismatchCount = counts.mm,
                         duplicateCount = counts.dup, overCount = counts.over,
                         totalRecords = counts.total,
@@ -614,7 +657,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         barcode = barcode,
                         fullCode = fullCode,
                         result = result,
-                        scannedAt = Date()
+                        scannedAt = Date(),
+                        operatorId = st.operatorId
                     )
                     val recordId = recordDao.insert(record)
 
@@ -643,7 +687,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 mismatch = st.mismatchCount,
                                 duplicate = st.duplicateCount,
                                 over = st.overCount,
-                                totalRecords = st.totalRecords + 1
+                                totalRecords = st.totalRecords + 1,
+                                operatorId = st.operatorId
                             )
                         }
                     } else false
@@ -865,5 +910,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val TAG = "AppViewModel"
+        const val KEY_LAST_OPERATOR = "last_operator"
     }
 }
