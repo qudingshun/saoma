@@ -76,6 +76,16 @@ object ScannerDiagnostics {
         }
     }
 
+    /** 显式 Activity 兜底：部分固件的扫描配置没有启动图标，只能按类名启动 */
+    private val EXPLICIT_ACTIVITIES = listOf(
+        "com.seuic.scanner.activity.MainActivity" to "com.seuic.scanner.activity",
+        "com.seuic.scanner.activity.SettingActivity" to "com.seuic.scanner.activity",
+        "com.seuic.scanner.activity.ScannerSettingActivity" to "com.seuic.scanner.activity",
+        "com.seuic.scanner.activity.ScanSettingActivity" to "com.seuic.scanner.activity",
+        "com.seuic.scanservice.MainActivity" to "com.seuic.scanservice",
+        "com.seuic.scanservice.SettingActivity" to "com.seuic.scanservice"
+    )
+
     /** 一键打开系统「扫描配置」；成功返回 true */
     fun openScannerConfig(context: Context): Boolean {
         val pm = context.packageManager
@@ -85,6 +95,16 @@ object ScannerDiagnostics {
             runCatching { context.startActivity(intent) }
                 .onSuccess { return true }
                 .onFailure { Log.d(TAG, "start $pkg failed: ${it.message}") }
+        }
+        // 兜底：按类名启动
+        for ((cls, pkg) in EXPLICIT_ACTIVITIES) {
+            val intent = Intent().apply {
+                component = android.content.ComponentName(pkg, cls)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }
+                .onSuccess { return true }
+                .onFailure { Log.d(TAG, "start $cls failed: ${it.message}") }
         }
         return false
     }
