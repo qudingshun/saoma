@@ -16,6 +16,7 @@ import com.zhuanggui.pda.ui.screen.OutboundScanScreen
 import com.zhuanggui.pda.ui.screen.OutboundSetupScreen
 import com.zhuanggui.pda.ui.screen.RecordsScreen
 import com.zhuanggui.pda.ui.screen.RulesScreen
+import com.zhuanggui.pda.ui.screen.ScannerSetupScreen
 import com.zhuanggui.pda.ui.screen.SyncSettingsScreen
 import com.zhuanggui.pda.ui.screen.TrashScreen
 import kotlinx.coroutines.launch
@@ -28,6 +29,7 @@ object Routes {
     const val RULE_LIBRARY = "rule_library"
     const val TRASH = "trash"
     const val SYNC = "sync"
+    const val SCANNER_SETUP = "scanner_setup"
 }
 
 @Composable
@@ -61,7 +63,17 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onSync = {
                     vm.refreshSyncState()
                     navController.navigate(Routes.SYNC)
-                }
+                },
+                onScannerSetup = { navController.navigate(Routes.SCANNER_SETUP) }
+            )
+        }
+
+        // ---------- 扫描设置（新机引导 + 自检） ----------
+        composable(Routes.SCANNER_SETUP) {
+            val lastScan by vm.lastScan.collectAsStateWithLifecycle()
+            ScannerSetupScreen(
+                lastScan = lastScan,
+                onBack = { navController.popBackStack() }
             )
         }
 

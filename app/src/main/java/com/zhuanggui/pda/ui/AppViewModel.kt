@@ -22,6 +22,7 @@ import com.zhuanggui.pda.export.RuleExporter
 import com.zhuanggui.pda.importer.RuleSourceImporter
 import com.zhuanggui.pda.net.PairingInfo
 import com.zhuanggui.pda.net.SyncRepository
+import com.zhuanggui.pda.scan.ScanEvent
 import com.zhuanggui.pda.scan.AlarmManager
 import com.zhuanggui.pda.sync.SyncScheduler
 import kotlinx.coroutines.Dispatchers
@@ -273,6 +274,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 待上传条数（扫码页/首页实时显示） */
     val syncPending: StateFlow<Int> = syncRepository.observePendingCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** 最近一次收到的扫码（v1.9.1：扫描设置自检页用） */
+    val lastScan: StateFlow<ScanEvent?> = scanner.lastScan
 
     /** 配对模式：下一条扫码内容按配对码解析（不影响正常扫码） */
     private val _pairing = MutableStateFlow(false)

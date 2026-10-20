@@ -3,6 +3,7 @@ package com.zhuanggui.pda.ui.screen
 import android.app.Activity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import com.zhuanggui.pda.export.FileExporter
  *  2. 继续装柜（快捷入口：最近有扫码记录时出现，一键带出最近的柜号续扫）
  *  3. 扫码记录查看
  *  4. WiFi 同步（v1.8.0：局域网配对/上传；未配对不影响扫码）
+ *  5. 扫描设置（v1.9.1：新 PDA 首次装机引导 + 扫码自检）
  *
  * 注：老的「Excel 导入工单（防错校验）」已下架，源码存档见 archive/excel-workorder-v1.2.0/
  */
@@ -52,7 +54,8 @@ fun HomeScreen(
     onOutbound: () -> Unit,
     onContinueLast: (String) -> Unit,
     onRecords: () -> Unit,
-    onSync: () -> Unit
+    onSync: () -> Unit,
+    onScannerSetup: () -> Unit
 ) {
     Scaffold { pad ->
         val context = LocalContext.current
@@ -87,7 +90,7 @@ fun HomeScreen(
                 fontSize = 16.sp,
                 color = Color.Gray
             )
-            Spacer(Modifier.height(44.dp))
+            Spacer(Modifier.height(26.dp))
 
             Button(
                 onClick = {
@@ -111,7 +114,7 @@ fun HomeScreen(
                 )
             }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(18.dp))
 
             if (lastContainerNo != null) {
                 // 继续装柜快捷入口：带出最近柜号进入设置页（自动载入原规则 + 已扫码数量）
@@ -142,11 +145,19 @@ fun HomeScreen(
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(10.dp))
             Text(
                 "记录自动保存：${FileExporter.displayPath()}/",
                 fontSize = 13.sp,
                 color = Color.Gray
+            )
+            Text(
+                "扫描设置（新 PDA 装机必看 / 扫码自检）",
+                fontSize = 13.sp,
+                color = Color(0xFF1976D2),
+                modifier = Modifier
+                    .clickable { onScannerSetup() }
+                    .padding(top = 6.dp)
             )
         }
     }
