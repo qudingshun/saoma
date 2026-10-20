@@ -2,17 +2,19 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回；可选 WiFi 回传电脑（多台 PDA 记录按 PDA 名称分目录存放）。
 
-**当前版本**：App **v1.9.1**（versionCode 29 / 数据库 v14）· 电脑端 **v1.3** · 操作指南 **V1.3**
+**当前版本**：App **v1.9.2**（versionCode 30 / 数据库 v14）· 电脑端 **v1.3** · 操作指南 **V1.3**
 **交付包**：`E:\saoma\成品出库_交付包_2026-10-20\`（APP + 电脑端 EXE + 操作指南 + 交付说明 + SHA-256）
+**现成规则库**：`docs/条码案例整理/型号规则库_可导入App_V1.xlsx`（275 条，可直接导入 App 规则库；来源见 `docs/条码案例整理/装柜台账_V1.xlsx`）
 
 ## 文档索引
 
 | 文档 | 用途 |
 | --- | --- |
 | [`docs/成品出库_操作指南_V1.3.docx`](docs/成品出库_操作指南_V1.3.docx) | **现场操作手册**（Word，同目录有 PDF；55 页真机逐步截图） |
-| [`docs/版本与里程碑.md`](docs/版本与里程碑.md) | 完整版本历史（v1.0→v1.9.1、电脑端 v1.1→v1.3）、里程碑与审计条目完成对照 |
+| [`docs/版本与里程碑.md`](docs/版本与里程碑.md) | 完整版本历史（v1.0→v1.9.2、电脑端 v1.1→v1.3）、里程碑与审计条目完成对照 |
 | [`docs/开发计划与优化建议.md`](docs/开发计划与优化建议.md) | 未完结清单、**下一步优化建议（P0/P1/P2）**、工程规范、风险与限制 |
 | [`docs/现场验收清单.md`](docs/现场验收清单.md) | 新机装机 / 扫描设置 / WiFi 同步 / 主流程逐条打勾 |
+| [`docs/条码案例整理/`](docs/条码案例整理/) | 条码案例（35 个工作簿）整理结果：装柜台账 + 可直接导入 App 的 275 条型号规则库 |
 | [`docs/WiFi同步/`](docs/WiFi同步/) | 电脑端同步服务的协议、部署与排障（`pc-server/` 内含源码与打包脚本） |
 
 ---
@@ -185,6 +187,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
   - 导入前会先显示「文件内 N 条、将新增 X 条 / 覆盖 Y 条」，确认后才写入（v1.8.3）
 - 导入的规则默认「不可重复扫 + 计入统计 + 不查历史 + 不忽略」；需要双码机/辅助码等设置时，导入后在规则库点「编辑」勾选
 - 维护方式：**型号优先**（先建型号，再逐个添加规则；列表按型号折叠显示）
+- v1.9.2：规则前缀除字母数字外，**新增支持 `-` 与 `#`**（真实机型如 `HYW-T55`、`#9970`），导入不再被丢弃；前缀统一大写（仅大小写不同的型号会合并为一条规则）
 
 ## 九、技术栈与数据库
 
@@ -243,7 +246,7 @@ E:\saoma\                          ← 项目根（Git 仓库）
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖 + 规则库同步 JSON，**41 项单测**）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 **7 项**，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖 + 规则库同步 JSON + 含 - # 的前缀，**42 项单测**）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 **7 项**，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在 `E:\saoma\saoma-keystore\zhuanggui-release.jks`（已 gitignore）；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装
 - ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份；**换签名身份 = 设备需卸载重装**（先快照、装后回灌，见 [`docs/版本与里程碑.md`](docs/版本与里程碑.md)）——本机 2026-10-19 已完成一次性签名切换（数据零丢失），此后 debug / release 互装无需卸载
@@ -284,6 +287,7 @@ E:\saoma\                          ← 项目根（Git 仓库）
 
 ## 十四、版本历史（最近）
 
+- **v1.9.2**：规则前缀支持 `-` 与 `#`（真实机型 `HYW-T55` / `#9970` 不再被导入丢弃）；单测 42 项
 - **v1.9.1**：App 内「扫描设置」页（新 PDA 装机引导 + 一键打开系统扫描配置 + 开发者选项 + 扫码自检）
 - **v1.9.0**：规则库 WiFi 同步（PDA 上传/下载 + 电脑网页 Excel 编辑 + 覆盖前备份）
 - **电脑端 v1.3**：多 PDA 命名、记录按 PDA 分目录、网页筛选与下载 ZIP

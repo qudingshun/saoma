@@ -41,10 +41,13 @@ object RuleSourceImporter {
         "barcode", "bardcode", "prefix", "rule", "code", "sn", "sku", "ean", "upc"
     )
 
-    /** 前缀清洗：仅接受字母+数字（整串），统一大写；无效返回 null */
+    /**
+     * 前缀清洗：接受字母 + 数字，以及机型里真实出现的 '-'（如 HYW-T55）与 '#'（如 #9970）；
+     * 统一大写；无效返回 null。v1.9.2：原只允许字母数字，会丢掉含 - # 的真实机型前缀。
+     */
     fun cleanPrefix(raw: String?): String? {
         val s = raw?.trim().orEmpty()
-        if (s.isEmpty() || !s.matches(Regex("[A-Za-z0-9]+"))) return null
+        if (s.isEmpty() || !s.matches(Regex("[A-Za-z0-9#\\-]+"))) return null
         return s.uppercase()
     }
 

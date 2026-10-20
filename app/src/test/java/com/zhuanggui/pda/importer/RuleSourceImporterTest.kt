@@ -71,4 +71,14 @@ class RuleSourceImporterTest {
         assertTrue(r.checkHistory)
         assertFalse(r.ignoreRepeat)
     }
+
+    /** v1.9.2：真实机型前缀含 - 与 #（如 HYW-T55、#9970），必须能录入 */
+    @Test
+    fun cleanPrefixAllowsDashAndHash() {
+        assertEquals("HYW-T55", RuleSourceImporter.cleanPrefix("hyw-t55"))
+        assertEquals("#9970", RuleSourceImporter.cleanPrefix("#9970"))
+        assertEquals("ASW-120HTB", RuleSourceImporter.cleanPrefix("ASW-120HTB"))
+        assertEquals(null, RuleSourceImporter.cleanPrefix("A B"))
+        assertEquals(null, RuleSourceImporter.cleanPrefix(""))
+    }
 }

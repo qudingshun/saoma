@@ -1322,7 +1322,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val parts = prefixInput.split(',', '，', '、', ';', '；', ' ', '\n', '\t').filter { it.isNotBlank() }
         val cleaned = parts.mapNotNull { RuleSourceImporter.cleanPrefix(it) }
         if (cleaned.isEmpty()) {
-            _ruleLibMessage.value = "前缀无效：仅支持字母+数字（0-9 / A-Z）"
+            _ruleLibMessage.value = "前缀无效：仅支持字母/数字及 - #（如 HYW-T55、#9970）"
             return
         }
         if (id != null && cleaned.size > 1) {
