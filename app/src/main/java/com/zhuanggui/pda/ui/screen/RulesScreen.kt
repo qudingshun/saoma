@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,16 +37,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 
-/** 规则源文件类型（解析端按扩展名判断，这里限定选择范围） */
+/** 规则源文件类型（解析端按扩展名判断，这里限定选择范围；含导出的 .tsv） */
 private val RULE_FILE_MIMES = arrayOf(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
     "application/vnd.ms-excel",                                           // .xls
     "text/csv",                                                           // .csv
-    "text/plain"                                                          // .txt
+    "text/plain",                                                         // .txt
+    "text/tab-separated-values",                                          // .tsv（规则库导出）
+    "application/octet-stream"                                            // 部分文件管理器对 .tsv 的兜底类型
 )
 
 /**
- * 规则库管理页：规则编辑（新增 / 修改 / 删除）+ 规则源导入（.xlsx / .xls / .csv / .txt）。
+ * 规则库管理页：规则编辑（新增 / 修改 / 删除）+ 规则源导入（.xlsx / .xls / .csv / .txt / .tsv）+ 导出（v1.7.4）。
  * v1.7.0（第 6 条）：同一型号可挂多条前缀（列表按型号分组）；每条规则带四个开关
  * （可重复扫 / 计入统计 / 查历史串号 / 忽略），新增时支持一次录入多个前缀。
  * 「规则选择」在装柜设置页的「从规则库选择」完成（连同四个开关一起复制到本柜）。
@@ -54,6 +57,7 @@ private val RULE_FILE_MIMES = arrayOf(
 fun RulesScreen(
     rules: List<RuleLibEntry>,
     importing: Boolean,
+    exporting: Boolean,
     message: String?,
     onMessageShown: () -> Unit,
     onSave: (
@@ -62,6 +66,7 @@ fun RulesScreen(
     ) -> Unit,
     onDelete: (Long) -> Unit,
     onImport: (Uri) -> Unit,
+    onExport: () -> Unit,
     onBack: () -> Unit
 ) {
     var editTarget by remember { mutableStateOf<EditTarget?>(null) }
@@ -132,24 +137,39 @@ fun RulesScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("规则库", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("规则库", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Button(
                         onClick = {
                             runCatching { importLauncher.launch(RULE_FILE_MIMES) }
                                 .onFailure { localMessage = "无法打开文件选择器：本机缺少文件管理应用" }
                         },
-                        enabled = !importing
+                        enabled = !importing,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(34.dp)
                     ) {
-                        Text(if (importing) "导入中…" else "导入规则源", fontSize = 14.sp)
+                        Text(if (importing) "导入中…" else "导入", fontSize = 12.sp)
                     }
-                    OutlinedButton(onClick = onBack) { Text("返回", fontSize = 14.sp) }
+                    OutlinedButton(
+                        onClick = onExport,
+                        enabled = !exporting && rules.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text(if (exporting) "导出中…" else "导出", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onBack,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) { Text("返回", fontSize = 12.sp) }
                 }
             }
 
             Text(
-                "导入支持 .xlsx / .xls / .csv / .txt：第一列 = 条码前缀（字母+数字），第二列 = 名称（可选）",
-                fontSize = 12.sp, color = Color.Gray
+                "导入支持 .xlsx / .xls / .csv / .txt：第一列 = 前缀，第二列 = 名称（可选），" +
+                    "第 3~6 列 = 四个开关（可选，1/0）；导出为同格式 TSV（含开关）",
+                fontSize = 11.sp, color = Color.Gray
             )
 
             Row(

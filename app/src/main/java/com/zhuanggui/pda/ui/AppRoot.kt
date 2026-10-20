@@ -179,10 +179,12 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         composable(Routes.RULE_LIBRARY) {
             val ruleLibrary by vm.ruleLibrary.collectAsStateWithLifecycle()
             val ruleImporting by vm.ruleImporting.collectAsStateWithLifecycle()
+            val ruleExporting by vm.ruleExporting.collectAsStateWithLifecycle()
             val ruleLibMessage by vm.ruleLibMessage.collectAsStateWithLifecycle()
             RulesScreen(
                 rules = ruleLibrary,
                 importing = ruleImporting,
+                exporting = ruleExporting,
                 message = ruleLibMessage,
                 onMessageShown = vm::clearRuleLibMessage,
                 onSave = { id, prefix, name, allowDup, count, checkHist, ignore ->
@@ -190,6 +192,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 },
                 onDelete = vm::deleteLibRule,
                 onImport = { uri -> vm.importRuleSource(context, uri) },
+                onExport = vm::exportRuleLibrary,
                 onBack = { navController.popBackStack() }
             )
         }

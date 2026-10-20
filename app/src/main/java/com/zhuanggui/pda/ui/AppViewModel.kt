@@ -16,6 +16,7 @@ import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.export.FileExporter
+import com.zhuanggui.pda.export.RuleExporter
 import com.zhuanggui.pda.importer.RuleSourceImporter
 import com.zhuanggui.pda.scan.AlarmManager
 import kotlinx.coroutines.Dispatchers
@@ -204,6 +205,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _ruleImporting = MutableStateFlow(false)
     val ruleImporting: StateFlow<Boolean> = _ruleImporting.asStateFlow()
+
+    private val _ruleExporting = MutableStateFlow(false)
+    val ruleExporting: StateFlow<Boolean> = _ruleExporting.asStateFlow()
 
     private var recordsJob: Job? = null
     private var containerLookupJob: Job? = null
@@ -1023,8 +1027,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 规则源导入：解析 .xlsx/.xls/.csv/.txt（第一列=前缀，第二列可选=名称），
-     * 全部写入规则库；前缀冲突则覆盖名称。结果通过 [ruleLibMessage] 提示。
+     * 规则源导入：解析 .xlsx/.xls/.csv/.txt（第一列=前缀，第二列可选=名称，第 3~6 列可选=四个开关），
+     * 全部写入规则库；前缀冲突则覆盖。源文件不带开关列时保留库内原开关（只更新名称）。
+     * 结果通过 [ruleLibMessage] 提示。
      */
     fun importRuleSource(context: Context, uri: Uri) {
         viewModelScope.launch {
@@ -1032,15 +1037,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val result = runCatching {
                 val parsed = withContext(Dispatchers.IO) { RuleSourceImporter.parse(context, uri) }
                 if (parsed.isEmpty()) {
-                    "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称"
+                    "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称，" +
+                        "第 3~6 列可选=可重复扫/计入统计/查历史串号/忽略（1/0）"
                 } else {
                     var added = 0
                     var updated = 0
                     app.database.withTransaction {
-                        val existing = ruleLibDao.getAll().map { it.prefix }.toSet()
+                        val existing = ruleLibDao.getAll().associateBy { it.prefix }
                         parsed.forEach { p ->
-                            if (p.prefix in existing) updated++ else added++
-                            ruleLibDao.upsert(RuleLibEntry(prefix = p.prefix, name = p.name))
+                            val old = existing[p.prefix]
+                            if (old != null) updated++ else added++
+                            // 导出的 TSV 带开关 → 以文件为准；普通两列文件 → 保留库内原开关
+                            val keep = p.hasFlags || old == null
+                            ruleLibDao.upsert(
+                                RuleLibEntry(
+                                    prefix = p.prefix,
+                                    name = p.name,
+                                    allowDuplicate = if (keep) p.allowDuplicate else old.allowDuplicate,
+                                    countEnabled = if (keep) p.countEnabled else old.countEnabled,
+                                    checkHistory = if (keep) p.checkHistory else old.checkHistory,
+                                    ignoreRepeat = if (keep) p.ignoreRepeat else old.ignoreRepeat,
+                                    updatedAt = Date()
+                                )
+                            )
                         }
                     }
                     "导入完成：新增 $added 条，覆盖 $updated 条，共 ${parsed.size} 条"
@@ -1048,6 +1067,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }.getOrElse { "导入失败：${it.message ?: "文件无法解析"}" }
             _ruleImporting.value = false
             _ruleLibMessage.value = result
+        }
+    }
+
+    /**
+     * 规则库导出（v1.7.4）：写成与「导入规则源」兼容的 TSV（含四个开关），
+     * 拷到其他 PDA 后用「导入规则源」选该文件即可完整还原。
+     */
+    fun exportRuleLibrary() {
+        viewModelScope.launch {
+            _ruleExporting.value = true
+            val msg = runCatching {
+                val list = ruleLibDao.getAll()
+                if (list.isEmpty()) {
+                    "规则库为空，没有可导出的规则"
+                } else {
+                    val file = withContext(Dispatchers.IO) { RuleExporter.export(list) }
+                    "已导出 ${list.size} 条规则：\n${RuleExporter.displayDir()}/${file.name}\n\n" +
+                        "拷贝到其他 PDA 后，在「规则库」点「导入」选择该文件即可（含四个开关）。"
+                }
+            }.getOrElse { "导出失败：${it.message ?: "无法写入存储，请检查存储权限"}" }
+            _ruleExporting.value = false
+            _ruleLibMessage.value = msg
         }
     }
 
