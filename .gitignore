@@ -9,7 +9,14 @@ build/
 .cxx
 local.properties
 
-# 签名：密码文件不入库（keystore 本体在仓库外 E:\saoma-keystore）
+# 签名：密码文件不入库（keystore 本体在 E:\saoma\saoma-keystore，同样不入库）
 keystore.properties
 *.jks
 *.keystore
+
+# 本机部署目录（不入库）
+/saoma-keystore/
+/saoma-sync/
+/成品出库_交付包_2026-10-20/
+/成品出库_交付包_2026-10-20.zip
+/装柜同步服务_v1.3_win64.zip

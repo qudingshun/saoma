@@ -1,12 +1,12 @@
 # PC 端同步服务（随仓库副本）
 
-实际运行目录建议：`E:\saoma-sync`（仓库外，避免把 `.venv` / 数据提交进 git）。
+实际运行目录建议：`E:\saoma\saoma-sync`（仓库外，避免把 `.venv` / 数据提交进 git）。
 本目录是源码副本，部署时整体复制到电脑即可。
 
 ## 1. 首次部署（只需一次）
 
 1. 安装 Python 3.11（勾选 Add to PATH）。
-2. 把本目录复制到 `E:\saoma-sync`，在该目录执行：
+2. 把本目录复制到 `E:\saoma\saoma-sync`，在该目录执行：
 
 ```powershell
 python -m venv .venv
@@ -114,7 +114,7 @@ PDA 的「WiFi 同步 → 规则库同步」：
 ## 4. 开机自启（可选）
 
 用「任务计划程序」创建任务：触发器 = 登录时，操作 = 启动
-`E:\saoma-sync\run_server.bat`，勾选「隐藏」、最高权限。
+`E:\saoma\saoma-sync\run_server.bat`，勾选「隐藏」、最高权限。
 免安装 EXE 版本可用同目录的「开机自启（可选）.bat」创建启动快捷方式。
 
 ## 4.1 打包成 EXE（换电脑/客户机免装 Python）
