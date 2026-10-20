@@ -87,11 +87,12 @@ fun OutboundSetupScreen(
     onRuleCheckHistory: (Boolean) -> Unit,
     onRuleSerialMin: (String) -> Unit,
     onRuleSerialMax: (String) -> Unit,
+    onRuleSerialTailLen: (String) -> Unit,
     onRuleIgnore: (Boolean) -> Unit,
     onAddRule: () -> Unit,
     onRemoveRule: (String) -> Unit,
     onRuleFlags: (String, Boolean, Boolean, Boolean, Boolean) -> Unit,
-    onRuleSerial: (String, String, String) -> Unit,
+    onRuleSerial: (String, String, String, Int) -> Unit,
     onAddRules: (List<String>) -> Unit,
     onOpenRuleLibrary: () -> Unit,
     onStart: () -> Unit,
@@ -107,8 +108,8 @@ fun OutboundSetupScreen(
         RuleSerialDialog(
             rule = rule,
             onDismiss = { serialRule = null },
-            onSave = { mn, mx ->
-                onRuleSerial(rule.prefix, mn, mx)
+            onSave = { mn, mx, tail ->
+                onRuleSerial(rule.prefix, mn, mx, tail)
                 serialRule = null
             }
         )
@@ -248,13 +249,13 @@ fun OutboundSetupScreen(
 
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 CompactTextField(
                     value = state.ruleSerialMin,
                     onValueChange = onRuleSerialMin,
                     label = "流水号最小值",
-                    placeholder = "选填，留空 = 不限",
+                    placeholder = "留空=不限",
                     numeric = true,
                     textSize = 13.sp,
                     modifier = Modifier.weight(1f)
@@ -263,7 +264,16 @@ fun OutboundSetupScreen(
                     value = state.ruleSerialMax,
                     onValueChange = onRuleSerialMax,
                     label = "流水号最大值",
-                    placeholder = "选填，留空 = 不限",
+                    placeholder = "留空=不限",
+                    numeric = true,
+                    textSize = 13.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                CompactTextField(
+                    value = state.ruleSerialTailLen,
+                    onValueChange = onRuleSerialTailLen,
+                    label = "末尾位数",
+                    placeholder = "0=整段",
                     numeric = true,
                     textSize = 13.sp,
                     modifier = Modifier.weight(1f)
@@ -338,6 +348,7 @@ fun OutboundSetupScreen(
                 ) {
                     Text(
                         "条码须以规则前缀开头；设了流水号范围时，前缀后的数字须落在最小~最大值之间，否则报“串号”。\n" +
+                            "条码中间还有无关字符/数字、流水号在末尾时：填「末尾位数」（如 3），则 ASV12SDFWG05455056$ 取末尾 3 位 056 核对（末尾符号忽略）。\n" +
                             "流水号范围可在规则行点「设范围 / 流水 …」补录/修改（从规则库导入的规则也可以）；两项留空 = 不限制。\n" +
                             "双码机：固定码 = 勾「可重复扫」+「忽略」（扫到不记录）或取消「计入统计」（辅助码，只留痕）；流水码 = 只勾「计入统计」。\n" +
                             "查历史串号：条码在其他柜记录里出现过 → 报串号（防旧箱混入本柜）；忽略仅「可重复扫」时生效。",
@@ -495,12 +506,16 @@ fun OutboundSetupScreen(
     }
 }
 
-/** 规则行「流水」标签：点击可补录/修改范围；未设时也显示，提示可设（v1.7.0 补录能力） */
-private fun serialRangeLabel(rule: RuleSpec): String = when {
-    rule.serialMin.isNotBlank() && rule.serialMax.isNotBlank() -> "流水 ${rule.serialMin}-${rule.serialMax}"
-    rule.serialMin.isNotBlank() -> "流水 ≥${rule.serialMin}"
-    rule.serialMax.isNotBlank() -> "流水 ≤${rule.serialMax}"
-    else -> "设范围"
+/** 规则行「流水」标签：点击可补录/修改范围；未设时显示「设范围」，末尾位数模式带「末N位」前缀 */
+private fun serialRangeLabel(rule: RuleSpec): String {
+    val tail = if (rule.serialTailLen > 0) "末${rule.serialTailLen}位 " else "流水 "
+    return when {
+        rule.serialMin.isNotBlank() && rule.serialMax.isNotBlank() -> "$tail${rule.serialMin}-${rule.serialMax}"
+        rule.serialMin.isNotBlank() -> "$tail≥${rule.serialMin}"
+        rule.serialMax.isNotBlank() -> "$tail≤${rule.serialMax}"
+        rule.serialTailLen > 0 -> "末${rule.serialTailLen}位（未设范围）"
+        else -> "设范围"
+    }
 }
 
 /** 流水号范围编辑弹窗（从规则库导入 / 手动录入的规则均可补录；两项留空 = 清除限制） */
@@ -508,10 +523,11 @@ private fun serialRangeLabel(rule: RuleSpec): String = when {
 private fun RuleSerialDialog(
     rule: RuleSpec,
     onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit
+    onSave: (String, String, Int) -> Unit
 ) {
     var mn by remember { mutableStateOf(rule.serialMin) }
     var mx by remember { mutableStateOf(rule.serialMax) }
+    var tail by remember { mutableStateOf(if (rule.serialTailLen > 0) rule.serialTailLen.toString() else "") }
     val invalid = mn.isNotBlank() && mx.isNotBlank() &&
         runCatching { java.math.BigInteger(mn) > java.math.BigInteger(mx) }.getOrDefault(false)
     AlertDialog(
@@ -536,23 +552,35 @@ private fun RuleSerialDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = tail,
+                    onValueChange = { tail = it.filter { c -> c.isDigit() }.take(2) },
+                    label = { Text("末尾流水号位数（0/空 = 前缀后整段）", fontSize = 12.sp) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
                 if (invalid) {
                     Text("最小值不能大于最大值", fontSize = 11.sp, color = Color(0xFFD32F2F))
                 } else {
                     Text(
-                        "设了范围后，前缀后的流水号须为纯数字且落在范围内，否则报“串号”；两项都留空 = 不限制。",
+                        "普通条码：前缀后整段须为纯数字并在范围内。\n" +
+                            "条码中间有无关字符/数字、流水号在末尾时：位数填 3，则 ASV12SDFWG05455056$ 取「056」核对（末尾符号忽略）。",
                         fontSize = 11.sp, color = Color(0xFF666666)
                     )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(mn, mx) }, enabled = !invalid) { Text("保存") }
+            TextButton(
+                onClick = { onSave(mn, mx, tail.toIntOrNull() ?: 0) },
+                enabled = !invalid
+            ) { Text("保存") }
         },
         dismissButton = {
             Row {
-                if (rule.serialMin.isNotBlank() || rule.serialMax.isNotBlank()) {
-                    TextButton(onClick = { onSave("", "") }) { Text("清除") }
+                if (rule.serialMin.isNotBlank() || rule.serialMax.isNotBlank() || rule.serialTailLen > 0) {
+                    TextButton(onClick = { onSave("", "", 0) }) { Text("清除") }
                 }
                 TextButton(onClick = onDismiss) { Text("取消") }
             }

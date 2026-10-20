@@ -34,23 +34,43 @@ fun decideScanResult(
 }
 
 /**
- * 流水号范围判定纯函数（v1.7.0：规则可选「流水号最小值/最大值」限定数据范围）。
+ * 流水号范围判定纯函数（v1.7.0：规则可选「流水号最小值/最大值」限定数据范围；
+ * v1.7.2：可选「末尾 N 位」流水号，兼顾条码中间有无关字符/数字、流水号在末尾的情况）。
  *
  * 语义（业务契约）：
  *  - 上下界都留空 → 不校验流水号（与旧版行为一致），直接通过
- *  - 设了任一侧 → 前缀之后的部分（[rest]）必须是纯数字，且数值落在范围内；否则不匹配（串号）
+ *  - [tailLen] = 0（默认）：前缀之后的部分（[rest]）必须是纯数字，且数值落在范围内；否则不匹配
+ *  - [tailLen] > 0：忽略 [rest] 末尾的字母/符号，取「最后 N 位数字」作为流水号再比对范围
+ *    （例：前缀 ASV12、tailLen=3，条码 ASV12SDFWG05455056$ → 取 056）
  *  - 数值比较用 BigInteger：兼容任意长度流水号，避免 Long 溢出
  *
  * @param rest 条码去掉规则前缀后的剩余部分（调用方 removePrefix 得到；前缀=整条码时为空）
  * @param serialMin 流水号最小值（空 = 不限）
  * @param serialMax 流水号最大值（空 = 不限）
+ * @param tailLen >0 = 取末尾 N 位数字（0 = 前缀后整段，旧行为）
  */
-fun serialInRange(rest: String, serialMin: String, serialMax: String): Boolean {
+fun serialInRange(
+    rest: String,
+    serialMin: String,
+    serialMax: String,
+    tailLen: Int = 0
+): Boolean {
     val min = serialMin.trim()
     val max = serialMax.trim()
     if (min.isEmpty() && max.isEmpty()) return true
-    if (rest.isEmpty() || !rest.all { it.isDigit() }) return false
-    val value = runCatching { java.math.BigInteger(rest) }.getOrNull() ?: return false
+
+    val serial: String = if (tailLen > 0) {
+        // 先去掉末尾的字母/符号（如 056$ → 056），再取最后 N 位
+        val trimmed = rest.trimEnd { !it.isDigit() }
+        if (trimmed.length < tailLen) return false
+        val tail = trimmed.takeLast(tailLen)
+        if (!tail.all { it.isDigit() }) return false
+        tail
+    } else {
+        if (rest.isEmpty() || !rest.all { it.isDigit() }) return false
+        rest
+    }
+    val value = runCatching { java.math.BigInteger(serial) }.getOrNull() ?: return false
     if (min.isNotEmpty()) {
         val lo = runCatching { java.math.BigInteger(min) }.getOrNull() ?: return false
         if (value < lo) return false

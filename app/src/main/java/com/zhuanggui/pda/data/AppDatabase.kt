@@ -21,7 +21,7 @@ import com.zhuanggui.pda.data.entity.ScanRecord
     entities = [
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -198,11 +198,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v11 → v12：load_rules 加「流水号末尾位数」serialTailLen（0 = 前缀后整段，保持旧行为） */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE load_rules ADD COLUMN serialTailLen INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11
+            MIGRATION_10_11, MIGRATION_11_12
         )
     }
 }

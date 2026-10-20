@@ -19,8 +19,9 @@ import org.junit.runner.RunWith
  *  - v9 → v10：scan_records 加 operatorId 列（用导出的 9.json 建库，默认值校验）
  *  - v10 → v11：load_rules 加 serialMin/serialMax/ignoreRepeat，rule_library 加四个规则开关
  *    （用导出的 10.json 建库，默认值校验）
- *  - v5 → v11 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→11 并按 11.json 校验。
+ *  - v11 → v12：load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 旧行为）
+ *  - v5 → v12 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→12 并按 12.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -138,9 +139,34 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v11 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v11（有 schema）→ v12：规则表加末尾流水号位数，历史行默认 0 = 旧行为 */
     @Test
-    fun migrate5To11_fullChain() {
+    fun migrate11To12_addsSerialTailLen() {
+        helper.createDatabase(TEST_DB, 11).use { db ->
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-11TO12', 10, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL(
+                "INSERT INTO load_rules (containerId, prefix, allowDuplicate, countEnabled, checkHistory, " +
+                    "serialMin, serialMax, ignoreRepeat) VALUES (1, 'ASV12', 0, 1, 0, '1', '300', 0)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 12, true, AppDatabase.ALL_MIGRATIONS[10])
+        try {
+            db.query("SELECT serialTailLen FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v12 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To12_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -202,9 +228,9 @@ class MigrationTest {
             db.version = 5
         }
 
-        // 跑 5→6→…→11（起点无 schema JSON，drop 校验传 false），结束后按 11.json 全量校验
+        // 跑 5→6→…→12（起点无 schema JSON，drop 校验传 false），结束后按 12.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 11, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 10)
+            TEST_DB, 12, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 11)
         )
         try {
             // 数据保留
@@ -240,6 +266,11 @@ class MigrationTest {
                 assertEquals("", c.getString(0))
                 assertEquals("", c.getString(1))
                 assertEquals(0, c.getInt(2))
+            }
+            // v12 新增末尾位数默认 0（前缀后整段，旧行为不变）
+            db.query("SELECT serialTailLen FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
             }
         } finally {
             db.close()

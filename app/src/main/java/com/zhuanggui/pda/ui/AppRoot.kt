@@ -74,6 +74,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onRuleCheckHistory = vm::onRuleCheckHistoryChange,
                 onRuleSerialMin = vm::onRuleSerialMinChange,
                 onRuleSerialMax = vm::onRuleSerialMaxChange,
+                onRuleSerialTailLen = vm::onRuleSerialTailLenChange,
                 onRuleIgnore = vm::onRuleIgnoreChange,
                 onAddRule = vm::addRule,
                 onRemoveRule = vm::removeRule,

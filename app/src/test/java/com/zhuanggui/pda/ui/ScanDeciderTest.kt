@@ -124,4 +124,40 @@ class ScanDeciderTest {
         assertEquals(true, serialInRange(big, big, bigger))
         assertEquals(false, serialInRange(bigger, big, big))
     }
+
+    // ---------- 末尾 N 位流水号（v1.7.2） ----------
+
+    /** 用户实例：前缀 ASV12，条码 ASV12SDFWG05455056$，末尾 3 位 = 056 */
+    @Test
+    fun serialTail_extractsLastDigits() {
+        val rest = "SDFWG05455056$"
+        assertEquals(true, serialInRange(rest, "1", "300", 3))     // 056 = 56
+        assertEquals(false, serialInRange(rest, "100", "300", 3))   // 56 < 100
+        assertEquals(true, serialInRange(rest, "1", "56", 3))
+    }
+
+    /** 末尾有无符号都取同样的数字（056 / 056$ / 056ABC） */
+    @Test
+    fun serialTail_ignoresTrailingSymbolsAndLetters() {
+        assertEquals(true, serialInRange("056", "1", "300", 3))
+        assertEquals(true, serialInRange("056$", "1", "300", 3))
+        assertEquals(true, serialInRange("056ABC", "1", "300", 3))
+        assertEquals(true, serialInRange("ABC-999-056$", "1", "300", 3))
+    }
+
+    /** 末尾位数不够 / 末尾不是数字 → 不匹配 */
+    @Test
+    fun serialTail_tooShortOrNoDigits_rejected() {
+        assertEquals(false, serialInRange("56", "1", "300", 3))
+        assertEquals(false, serialInRange("$", "1", "300", 3))
+        assertEquals(false, serialInRange("", "1", "300", 3))
+        assertEquals(false, serialInRange("05A", "1", "300", 3))
+    }
+
+    /** tailLen=0 保持旧语义（前缀后整段必须是数字） */
+    @Test
+    fun serialTail_zero_keepsLegacyBehavior() {
+        assertEquals(false, serialInRange("SDFWG05455056$", "1", "300", 0))
+        assertEquals(true, serialInRange("056", "1", "300", 0))
+    }
 }

@@ -49,6 +49,8 @@ enum class SetupScanTarget { RULE, OPERATOR }
  *  - [countEnabled] 计入统计：不勾选 = 辅助码（AUX），只留痕不计数、不占计划装柜数量
  *  - [checkHistory] 查历史串号：条码若在其他柜的记录里出现过 → 报串号（防止混入其他柜的旧箱）
  *  - [serialMin] / [serialMax] 流水号范围（v1.7.0）：前缀之后的数字须落在范围内，空 = 该侧不限
+ *  - [serialTailLen] 末尾流水号位数（v1.7.2）：>0 = 取条码末尾 N 位数字作为流水号（忽略末尾符号），
+ *    用于中间还有不参与核对的字符/数字、流水号在末尾的条码；0 = 前缀后整段数字
  *  - [ignoreRepeat] 忽略（v1.7.0）：仅「可重复扫」时生效，扫到不记录、不落盘、不计数（语音报“辅助码”）
  */
 data class RuleSpec(
@@ -58,6 +60,7 @@ data class RuleSpec(
     val checkHistory: Boolean = false,
     val serialMin: String = "",
     val serialMax: String = "",
+    val serialTailLen: Int = 0,
     val ignoreRepeat: Boolean = false
 )
 
@@ -72,6 +75,7 @@ data class OutboundSetupState(
     val ruleCheckHistory: Boolean = false,     // 新增规则时勾选：查历史串号
     val ruleSerialMin: String = "",            // 新增规则时填：流水号最小值（选填，v1.7.0）
     val ruleSerialMax: String = "",            // 新增规则时填：流水号最大值（选填，v1.7.0）
+    val ruleSerialTailLen: String = "",        // 新增规则时填：流水号取末尾 N 位（空/0 = 前缀后整段，v1.7.2）
     val ruleIgnoreRepeat: Boolean = false,      // 新增规则时勾选：忽略（仅可重复扫时生效，v1.7.0）
     val scannedQuantity: Int = 0,              // 今天已扫码数量（只读展示，自动统计；= 已装柜数量）
     val storedPlan: Int = 0,                   // 命中柜号的已存计划装柜数量（0 = 无/不限；仅用于提示与留空续装兜底）
@@ -273,6 +277,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         checkHistory = it.checkHistory,
                         serialMin = it.serialMin,
                         serialMax = it.serialMax,
+                        serialTailLen = it.serialTailLen,
                         ignoreRepeat = it.ignoreRepeat
                     )
                 }
@@ -337,6 +342,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setup.update { it.copy(ruleSerialMax = v.filter { c -> c.isDigit() }.take(12)) }
     }
 
+    /** 新增规则时填：流水号取末尾 N 位（0/空 = 前缀后整段；上限 6 位） */
+    fun onRuleSerialTailLenChange(v: String) {
+        _setup.update { it.copy(ruleSerialTailLen = v.filter { c -> c.isDigit() }.take(2)) }
+    }
+
     /** 新增规则时的勾选：忽略（仅「可重复扫」时生效；扫到不记录、不落盘、不计数） */
     fun onRuleIgnoreChange(v: Boolean) {
         _setup.update { it.copy(ruleIgnoreRepeat = v) }
@@ -355,11 +365,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     checkHistory = s.ruleCheckHistory,
                     serialMin = s.ruleSerialMin,
                     serialMax = s.ruleSerialMax,
+                    serialTailLen = s.ruleSerialTailLen.toIntOrNull() ?: 0,
                     ignoreRepeat = s.ruleAllowDup && s.ruleIgnoreRepeat
                 ),
                 ruleInput = "",
                 ruleSerialMin = "",
-                ruleSerialMax = ""
+                ruleSerialMax = "",
+                ruleSerialTailLen = ""
             )
         }
     }
@@ -392,13 +404,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 列表里补录/修改某条规则（含从规则库导入的）的流水号范围；
      * 两项都留空 = 不限制。只保留数字（与录入时一致），避免非法值导致全部条码报串号。
+     * [serialTailLen] > 0 = 取条码末尾 N 位数字作为流水号（忽略末尾符号），0 = 前缀后整段。
      */
-    fun updateRuleSerial(prefix: String, serialMin: String, serialMax: String) {
+    fun updateRuleSerial(prefix: String, serialMin: String, serialMax: String, serialTailLen: Int) {
         val mn = serialMin.filter { it.isDigit() }.take(12)
         val mx = serialMax.filter { it.isDigit() }.take(12)
+        val tail = serialTailLen.coerceIn(0, 20)
         _setup.update { s ->
             s.copy(rules = s.rules.map {
-                if (it.prefix == prefix) it.copy(serialMin = mn, serialMax = mx) else it
+                if (it.prefix == prefix) it.copy(
+                    serialMin = mn, serialMax = mx, serialTailLen = tail
+                ) else it
             })
         }
     }
@@ -508,6 +524,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                     checkHistory = it.checkHistory,
                                     serialMin = it.serialMin,
                                     serialMax = it.serialMax,
+                                    serialTailLen = it.serialTailLen,
                                     ignoreRepeat = it.ignoreRepeat
                                 )
                             )
@@ -729,7 +746,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     // 前缀匹配 + 流水号范围（v1.7.0 第 1 条：规则可限定流水号区间；未填范围则不校验）
                     val prefixSpecs = st.rules.filter { barcode.startsWith(it.prefix) }
                     val matchedSpecs = prefixSpecs.filter {
-                        serialInRange(barcode.removePrefix(it.prefix), it.serialMin, it.serialMax)
+                        serialInRange(
+                            barcode.removePrefix(it.prefix),
+                            it.serialMin, it.serialMax, it.serialTailLen
+                        )
                     }
                     val matched = st.rules.isEmpty() || matchedSpecs.isNotEmpty()
                     val rangeFiltered = prefixSpecs.isNotEmpty() && matchedSpecs.isEmpty()
@@ -789,7 +809,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                         spec.serialMax.isNotBlank() -> "≤${spec.serialMax}"
                                         else -> ""
                                     }
-                                    val suffix = if (range.isBlank()) "" else "（$range）"
+                                    val suffix = if (range.isBlank()) "" else {
+                                        val tail = if (spec != null && spec.serialTailLen > 0)
+                                            "末${spec.serialTailLen}位 " else ""
+                                        "（$tail$range）"
+                                    }
                                     "串号报警！条码流水号不在规则范围$suffix：$barcode"
                                 }
                                 else -> "串号报警！条码不符合本柜规则：$barcode"

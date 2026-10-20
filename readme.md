@@ -2,7 +2,7 @@
 
 运行在 **东集 CRUISE2 安卓工业 PDA（Android 11）** 的离线装柜扫码工具：一柜一档、扫码即校验（串号 / 重复 / 超量）、实时落盘、删除可撤回。
 
-**当前版本：v1.7.1（versionCode 19，数据库 v11）** ｜ 状态：签名体系已就绪，现场机已运行 v1.7.x 正式签名包（debug / release 同钥匙，可无缝互装）
+**当前版本：v1.7.2（versionCode 20，数据库 v12）** ｜ 状态：签名体系已就绪，现场机已运行 v1.7.x 正式签名包（debug / release 同钥匙，可无缝互装）
 
 ## 功能与操作流程
 
@@ -19,6 +19,8 @@
  │        │    焦点在工号栏时扫码键填入工号（替换）；焦点在其余位置时填入规则栏（原行为）
  │        ├─ 规则录入：扫真码自动填入（人工删减成前缀）/ 手动录入 / 从规则库选择（多选）
  │        ├─ 录入规则可填「流水号最小值 / 最大值」：前缀后的数字须落在范围内，超范围报串号（留空 = 该侧不限）
+ │        ├─ 流水号不在前缀后整段时：再填「末尾位数」N（如 3）→ 取条码最后 N 位数字核对（末尾符号/字母忽略），
+ │        │    例：ASV12SDFWG05455056$，前缀 ASV12、末尾 3 位 → 核对 056
  │        ├─ 规则行点「设范围 / 流水 …」可补录 / 修改 / 清除范围（从规则库导入的规则同样可设）
  │        ├─ 每条规则可勾：可重复扫（双码机固定码）/ 计入统计（不勾 = 辅助码，只留痕不计数）/ 查历史串号 /
  │        │    忽略（仅「可重复扫」时生效：扫到不记录、不落盘、不计数，语音仍播报「辅助码」）
@@ -47,7 +49,7 @@
 
 | 情况 | 结果 | 反馈 |
 |---|---|---|
-| 条码不以任何规则前缀开头，或流水号超出该规则的最小/最大值 | 串号 SERIAL_MISMATCH | 红屏 + 蜂鸣 + 循环振动 |
+| 条码不以任何规则前缀开头，或流水号超出该规则的最小/最大值（含「末尾 N 位」模式下取出的末尾 N 位数字） | 串号 SERIAL_MISMATCH | 红屏 + 蜂鸣 + 循环振动 |
 | 同柜已扫过的条码（该规则未勾「可重复扫」） | 重复 DUPLICATE | 红屏 + 蜂鸣 + 循环振动 |
 | 勾「查历史串号」的规则：条码已在其他柜记录里出现过 | 串号 SERIAL_MISMATCH | 红屏 + 蜂鸣 + 循环振动；提示"已于 xx 在柜 xxx 录入过" |
 | 命中「不计入统计」规则的条码 | 辅助 AUX | 蓝屏 + 嘀声，只留痕不计数（可反复扫） |
@@ -117,7 +119,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`（工作目录 `E:\saoma`）；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序 + 流水号范围，13 项单测 + 语音报数自然读法 8 项）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 4 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定顺序 + 流水号范围/末尾位数，17 项单测 + 语音报数自然读法 8 项，共 25 项）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 5 项，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在**仓库外** `E:\saoma-keystore\zhuanggui-release.jks`；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装（需 `run-as` 排障时装 debug）
 - ⚠️ keystore = App 身份：丢失后老设备无法覆盖升级，务必异地备份（备份说明随 keystore 目录）；**换签名身份 = 设备需卸载重装**（先快照、装后用快照回灌，见 `子项目计划.md`）——本机 2026-10-19 已完成一次性签名切换（快照 → 卸载 → 装新签名包 → 回灌验证，数据零丢失），此后 debug / release 互装均无需卸载
@@ -130,12 +132,12 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk            # 覆盖安�
 
 - Kotlin + Jetpack Compose（单 Activity 导航）；Room（带版本迁移）；Apache POI（仅规则源导入解析 .xlsx/.xls 用）；无后端、无网络，多台 PDA 各自独立
 
-数据库 v11（`data/AppDatabase.kt`）：
+数据库 v12（`data/AppDatabase.kt`）：
 
 ```
 load_containers  装柜会话（柜号唯一：同号柜永远复用同一行；id 关联规则与记录）
 load_rules       本柜条码规则快照（prefix / allowDuplicate / countEnabled / checkHistory /
-                 serialMin / serialMax / ignoreRepeat）
+                 serialMin / serialMax / serialTailLen / ignoreRepeat）
 scan_records     扫码记录（每扫一码一条，含串号/重复/超量/辅助完整留痕；deletedAt = 软删除）
 rule_library     规则库（prefix 唯一 + name 型号 + allowDuplicate / countEnabled / checkHistory / ignoreRepeat）
 ```
@@ -145,8 +147,9 @@ rule_library     规则库（prefix 唯一 + name 型号 + allowDuplicate / coun
      v4→v5 建规则库表；v5→v6 scan_records 加 deletedAt；v6→v7 load_rules 加双码机选项；
      v7→v8 load_rules 加 checkHistory；v8→v9 scan_records 加 barcode 索引；
      v9→v10 scan_records 加 operatorId；v10→v11 load_rules 加 serialMin/serialMax/ignoreRepeat、
-     rule_library 加四个规则开关（历史行取旧行为默认值）
-迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9、9→10、10→11 单步 + 5→11 全链，真机运行 4 项）
+     rule_library 加四个规则开关（历史行取旧行为默认值）；
+     v11→v12 load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 前缀后整段）
+迁移测试：`app/src/androidTest/.../MigrationTest.kt`（8→9、9→10、10→11、11→12 单步 + 5→12 全链，真机运行 5 项）
 ```
 
 `ScanResult`：`OK / NOT_IN_LIST（历史遗留）/ OVER_LIMIT / SERIAL_MISMATCH / DUPLICATE / AUX`
@@ -173,6 +176,7 @@ app/src/main/java/com/zhuanggui/pda/
 
 ## 版本历史
 
+- **v1.7.2（versionCode 20，DB v12）**：流水号新增「末尾 N 位」模式——条码中间还有不参与核对的字符/数字、流水号在末尾时（如 `ASV12SDFWG05455056$`，前缀 `ASV12`、末尾 3 位 → 核对 `056`），在录入规则或规则行「设范围」弹窗填「末尾位数」N 即可：取条码去掉末尾字母/符号后的最后 N 位数字比对范围；0/空 = 旧语义（前缀后整段必须是数字）。规则行标签显示「末N位 1-300」，扫码页规则摘要同步带「末N位」；DB v11→v12（`load_rules.serialTailLen`，历史行默认 0，行为不变）
 - **v1.7.1（versionCode 19，DB v11）**：设置页 / 扫码页紧凑化——输入框改为 42dp 紧凑样式（标签内置 9sp、正文 14sp，替代 56dp 的 OutlinedTextField，标签不再浮到框外）；标题、提示、规则行、计数卡、记录行字号整体下调；页边距、元素间距、按钮高度收紧；规则行「删除」移到第二行右端，未设流水号范围时标签显示「设范围」；扫码页进入时不再自动弹出软键盘（焦点仍保留给扫码枪，记录区完整可见），点输入框仍可手动录入；已扫码行距放宽；扫码后记录列表自动回到第一行；语音报数改自然读法（10 → 十、25 → 二十五、105 → 一百零五、256 → 二百五十六、300 → 三百，新增 十/百/零 片段，超过 999 退回逐位；单测 8 项）
 - **v1.7.0（versionCode 18，DB v11）**：子项目波次 8（现场五项 + 规则库/语音两条补充）——① 录入规则支持「流水号最小值 / 最大值」限定数据范围（前缀后须为纯数字并落在闭区间内，任一侧留空 = 该侧不限；超范围报串号，提示改为「流水号超出规则范围」）；添加后可在规则行点「设范围 / 流水 …」补录 / 修改 / 清除范围，从规则库导入的规则同样适用；② 「本柜条码规则」列表移到【装柜】按钮下方固定区域（内部滚动，不再影响上方设置排版）；③ 计划装柜数量回显：从扫码页返回显示上次设置的计划、选择前面已有的柜号显示该柜前期存的计划；④ 「已扫码数量」改为与工号栏同款只读输入框（大小布局一致、数字不可修改）；⑤ 「报警设置」升级为「震动和声音设置」：正常扫码 / 非正常扫码分组，各自可设声音开关与震动强度（关/弱/中/强，旧开关作为默认值）；⑥ 规则库按型号分组、同一型号可挂多条前缀（新增支持一次录入多个前缀），每条规则带 可重复扫 / 计入统计 / 查历史串号 / 忽略 四个开关，选择到本柜时连同开关一起复制；「忽略」仅对「可重复扫」生效——扫到不记录、不落盘、不计数，正常反馈并语音报「辅助码」；⑦ 语音朗读（默认开，可在「震动和声音设置」关闭）：正常扫码读「已扫码，N」，辅助码 / 忽略读「辅助码」；使用**内置中文语音片段**（assets/voice，离线生成），不依赖系统 TTS 引擎，异常时静默降级；DB v10→v11 迁移（load_rules 加 serialMin/serialMax/ignoreRepeat，rule_library 加四开关；历史行取旧行为默认值）
 - **v1.6.0（versionCode 17，DB v10）**：子项目波次 7（操作员工号）+ 计划数量语义修正——设置页新增「操作员工号」（选填：字母+数字、自动大写、≤12 位，记住上次填写；焦点在工号栏时扫码键填入工号，其余位置填入规则栏）；每条扫码记录写入工号，记录 TSV 末尾加「操作员」列、装柜完成汇总末尾加「操作员」列，记录页 / 回收站行显示「操作员：X」；DB v9→v10 迁移（`scan_records.operatorId`，历史记录默认空串）；**计划装柜数量不再被自动改写**：输入框只由人工填写，输入已有柜号不再回填（退出再进入不丢失、不被覆盖），「已扫码数量（= 已装柜数量）」常显只读自动统计；命中今天已扫码的柜号且计划留空 → 装柜时按该柜已存计划继续（防重复装闭环保持）
@@ -203,6 +207,7 @@ app/src/main/java/com/zhuanggui/pda/
 
 - [ ] 现场验收清单（v1.7.0）：
   - 流水号范围：给规则填最小/最大值 → 范围内正常、范围外报「条码流水号超出规则范围」；留空一侧 = 该侧不限；前缀后带字母（设了范围时）报串号
+  - 末尾流水号：条码中间有无关字符/数字、流水号在末尾时（如 ASV12SDFWG05455056$），填「末尾位数」3 → 核对 056；末尾带 $ 或不带都按 056 处理；位数填错（如 4）应取 5056 并按范围报串号
   - 流水号补录：从规则库选择（不带范围）或手动添加规则后，点规则行「流水 …」→ 填范围保存；列表标签与扫码页规则摘要同步，扫码按新范围判定；点「清除」恢复不限
   - 规则列表位置：本柜条码规则在【装柜】按钮下方；增删规则时上方设置区不位移
   - 计划回显：从扫码页返回 → 计划装柜数量显示上次设置值；输入前面已有的柜号 → 显示该柜前期存的计划

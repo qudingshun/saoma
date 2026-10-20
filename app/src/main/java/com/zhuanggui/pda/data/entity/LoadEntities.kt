@@ -31,6 +31,9 @@ data class LoadContainer(
  * 条码规则：属于某个柜，前缀 = 条码中固定的部分（拼装柜可挂多条 = 多型号）。
  * 流水号范围（v11，选填）：前缀之后的流水号数字须落在 [serialMin, serialMax] 内
  * （留空 = 该侧不限；两侧都留空 = 不校验流水号，行为与旧版一致）。
+ * serialTailLen（v12）：>0 = 取条码「末尾 N 位数字」作为流水号（先忽略末尾字母/符号），
+ * 用于条码中间还有不参与核对的字符/数字、流水号在末尾的情况（如 ASV12SDFWG05455056$ → 056）。
+ * 0 = 旧语义（前缀之后整段必须是纯数字）。
  */
 @Entity(
     tableName = "load_rules",
@@ -53,6 +56,7 @@ data class LoadRule(
     val checkHistory: Boolean = false,        // 查历史串号：条码若在其他柜记录里出现过 → 报串号（防混柜）
     val serialMin: String = "",               // 流水号最小值（前缀之后的数字下界；空 = 不限，v11）
     val serialMax: String = "",               // 流水号最大值（前缀之后的数字上界；空 = 不限，v11）
+    val serialTailLen: Int = 0,               // 流水号取末尾 N 位数字（0 = 前缀后整段，v12）
     val ignoreRepeat: Boolean = false         // 忽略（仅“可重复扫”时生效）：扫到不记录、不落盘、不计数（v11）
 )
 

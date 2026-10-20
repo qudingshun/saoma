@@ -406,6 +406,7 @@ fun OutboundScanScreen(
                                         r.serialMax.isNotBlank() -> "≤${r.serialMax}"
                                         else -> null
                                     }
+                                    if (r.serialTailLen > 0) add("末${r.serialTailLen}位")
                                     if (rng != null) add("流水$rng")
                                 }
                                 r.prefix + if (tags.isEmpty()) "" else "（${tags.joinToString("/")}）"
