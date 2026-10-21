@@ -446,9 +446,13 @@ fun OutboundScanScreen(
                         )
                     }
                     Text(
-                        if (state.lastFullCode.isBlank()) "每扫一码自动保存到 TSV 文件"
-                        else if (state.fileSaved) "✓ 已自动保存（${FileExporter.displayPath()}/）"
-                        else "⚠ 最近一条未写入文件，请检查存储权限",
+                        when {
+                            state.lastFullCode.isBlank() ->
+                                "每扫一码自动保存到 ${FileExporter.displayPath()}/"
+                            state.fileSaved -> "✓ 已自动保存（${FileExporter.displayPath()}/）"
+                            // v1.10.0：给出真实原因（主目录不可写时已暂存到 App 私有目录）
+                            else -> "⚠ ${FileExporter.lastWriteError ?: "最近一条未写入文件，请检查存储权限"}"
+                        },
                         fontSize = 10.sp,
                         lineHeight = 14.sp,
                         modifier = Modifier.padding(top = 2.dp),

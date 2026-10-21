@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream
  */
 object RuleExporter {
 
-    private const val DIR = "ZhuangGui/规则库"
+    private const val DIR = "zhuanggui/规则库"
     private val timeFormat: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.US)
 

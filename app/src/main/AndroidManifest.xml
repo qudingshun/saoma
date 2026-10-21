@@ -2,9 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 装柜记录自动落盘 /sdcard/ZhuangGui/装柜记录/ -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
+    <!-- 装柜记录自动落盘 /sdcard/zhuanggui/装柜记录/
+         注意：部分东集 ROM 仍用 legacy sdcardfs 挂载 /data/media，
+         只有真正「授予」WRITE_EXTERNAL_STORAGE 的应用才会被加入 sdcard_rw 组、
+         才能在 /sdcard 根目录建目录写文件；带 maxSdkVersion=29 时在 Android 11+
+         不会授予，MANAGE_EXTERNAL_STORAGE 也救不了 sdcardfs 的组权限 → 表现为
+         「有权限却写不进 /sdcard」。因此这里不再限制 maxSdkVersion。 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />

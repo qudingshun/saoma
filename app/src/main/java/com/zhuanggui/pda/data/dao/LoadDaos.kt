@@ -172,6 +172,10 @@ interface ScanRecordDao {
     @Query("SELECT COUNT(*) FROM scan_records WHERE syncedAt IS NULL")
     suspend fun countPending(): Int
 
+    /** v1.10.0：全量记录（启动时按库重建落盘文件，修「已扫但没落盘」） */
+    @Query("SELECT * FROM scan_records ORDER BY scannedAt, id")
+    suspend fun getAllRecords(): List<ScanRecord>
+
     /** 上传成功回写；传 null 表示需要重传（软删除变化时用） */
     @Query("UPDATE scan_records SET syncedAt = :at WHERE uid IN (:uids)")
     suspend fun markSynced(uids: List<String>, at: Date?)

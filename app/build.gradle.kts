@@ -22,10 +22,20 @@ android {
     defaultConfig {
         applicationId = "com.zhuanggui.pda"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 30
-        versionName = "1.9.2"
+        // v1.10.0：targetSdk 29 —— 东集 CRUISE2 等工业 PDA 的 Android 11 ROM 仍用 legacy sdcardfs
+        // 挂载 /data/media，只有 targetSdk≤29 的应用才会被加入 sdcard_rw 组、才能在 /sdcard 根目录
+        // 建目录写文件（targetSdk 30+ 时 MANAGE_EXTERNAL_STORAGE 也救不了组权限 → 表现为
+        // 「有权限却写不进 /sdcard」）。29 还能保留 requestLegacyExternalStorage 的旧行为。
+        targetSdk = 29
+        versionCode = 31
+        versionName = "1.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    lint {
+        // targetSdk 29 是现场工业 PDA 的有意选择（legacy 外部存储），不做强制升级提示
+        disable += "ExpiredTargetSdkVersion"
+        disable += "OldTargetApi"
     }
 
     signingConfigs {

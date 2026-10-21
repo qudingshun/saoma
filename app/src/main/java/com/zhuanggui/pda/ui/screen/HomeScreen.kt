@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.zhuanggui.pda.AppConfig
 import com.zhuanggui.pda.BuildConfig
 import com.zhuanggui.pda.R
 import com.zhuanggui.pda.export.FileExporter
@@ -61,8 +62,10 @@ fun HomeScreen(
         val context = LocalContext.current
         // 存储授权状态：进入/回到首页时复检（去系统设置授权完返回 → 提示自动消失）
         var hasStorage by remember { mutableStateOf(FileExporter.hasPermission(context)) }
+        var storageStatus by remember { mutableStateOf(FileExporter.storageStatus()) }
         LifecycleResumeEffect(Unit) {
             hasStorage = FileExporter.hasPermission(context)
+            storageStatus = FileExporter.storageStatus()
             onPauseOrDispose { }
         }
         Column(
@@ -108,9 +111,21 @@ fun HomeScreen(
             }
             if (!hasStorage) {
                 Text(
-                    "⚠ 未授权「所有文件访问」：记录不会自动落盘；点上方按钮按提示授权后返回本页即消失",
+                    "⚠ 无法写入 /sdcard/zhuanggui：记录不会自动落盘；点上方按钮按提示授权后返回本页即消失",
                     fontSize = 12.sp, color = Color(0xFFD32F2F),
                     modifier = Modifier.padding(top = 6.dp)
+                )
+            } else if (storageStatus == FileExporter.StorageStatus.FALLBACK) {
+                Text(
+                    "⚠ 主目录不可写，记录已暂存到 App 私有目录；点此重新导出到 ${FileExporter.displayPath()}/",
+                    fontSize = 12.sp, color = Color(0xFFF57F17),
+                    modifier = Modifier
+                        .clickable {
+                            FileExporter.exportFallbackToPrimary()
+                            storageStatus = FileExporter.storageStatus()
+                            hasStorage = FileExporter.hasPermission(context)
+                        }
+                        .padding(top = 6.dp)
                 )
             }
 
@@ -134,15 +149,18 @@ fun HomeScreen(
                 Text("扫码记录查看", fontSize = 20.sp)
             }
 
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = onSync,
-                modifier = Modifier.fillMaxWidth().height(56.dp)
-            ) {
-                Text(
-                    if (syncPending > 0) "WiFi 同步（$syncPending 条待传）" else "WiFi 同步",
-                    fontSize = 18.sp
-                )
+            // v1.10.0：WiFi 同步默认下线（AppConfig.SYNC_ENABLED），代码保留，改常量即可恢复
+            if (AppConfig.SYNC_ENABLED) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onSync,
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                ) {
+                    Text(
+                        if (syncPending > 0) "WiFi 同步（$syncPending 条待传）" else "WiFi 同步",
+                        fontSize = 18.sp
+                    )
+                }
             }
 
             Spacer(Modifier.height(10.dp))
