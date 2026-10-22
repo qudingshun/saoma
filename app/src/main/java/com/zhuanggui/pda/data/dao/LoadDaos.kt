@@ -134,9 +134,9 @@ interface ScanRecordDao {
     )
     fun observeByContainerOnDay(containerId: Long, dayLabel: String): Flow<List<ScanRecord>>
 
-    /** 当前柜最近 N 条（扫码页滚动显示） */
-    @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT :limit")
-    fun observeByContainer(containerId: Long, limit: Int): Flow<List<ScanRecord>>
+    /** 当前柜全部有效记录（扫码页滚动显示；单柜通常不超过 300 条） */
+    @Query("SELECT * FROM scan_records WHERE containerId = :containerId AND deletedAt IS NULL ORDER BY scannedAt DESC, id DESC")
+    fun observeByContainer(containerId: Long): Flow<List<ScanRecord>>
 
     /** 首页「继续装柜」快捷入口：最近一次有效扫码的柜号（无记录时 null） */
     @Query("SELECT containerNo FROM scan_records WHERE deletedAt IS NULL ORDER BY scannedAt DESC, id DESC LIMIT 1")

@@ -555,7 +555,7 @@ fun OutboundScanScreen(
             ) {
                 Text("本柜记录", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "共 ${state.totalRecords} 条 · 最近 ${records.size} 条可点按删除（正常记录需三次确认）",
+                    "共 ${records.size} 条 · 本柜全部记录可点按删除（正常记录需三次确认）",
                     fontSize = 9.sp, color = Color.Gray
                 )
             }

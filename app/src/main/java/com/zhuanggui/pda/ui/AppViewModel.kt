@@ -919,7 +919,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     _outboundStage.value = OutboundStage.SCANNING
                     recordsJob?.cancel()
                     recordsJob = viewModelScope.launch {
-                        recordDao.observeByContainer(container.id, 100).collect {
+                        recordDao.observeByContainer(container.id).collect {
                             _outboundRecords.value = it
                         }
                     }
