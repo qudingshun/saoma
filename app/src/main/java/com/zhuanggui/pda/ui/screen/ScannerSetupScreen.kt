@@ -118,10 +118,22 @@ fun ScannerSetupScreen(
                 }
             }
 
+            // ---------- 输出方式（v1.10.2：只认广播） ----------
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text("② 输出方式：广播（唯一记录通道）", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "「扫描配置 → 输出方式」请选「广播」。v1.10.2 起 App 只认广播，" +
+                            "键盘注入不参与记录；同一次扳机若因双通道在 800ms 内到达两遍，也只记一条。",
+                        fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+
             // ---------- 扫码自检 ----------
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text("② 扫码自检", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("③ 扫码自检", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     Text(
                         "用扫码枪扫任意条码，这里能显示内容就说明链路已通（无需进入装柜页）。",
                         fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 2.dp)
@@ -165,7 +177,7 @@ fun ScannerSetupScreen(
             // ---------- 配置步骤 ----------
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text("③ 扫描设置步骤（照着填）", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("④ 扫描设置步骤（照着填）", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     HorizontalDivider(Modifier.padding(vertical = 4.dp))
                     ScannerDiagnostics.SETUP_STEPS.lines().forEach { line ->
                         Text(line, fontSize = 11.sp, color = Color(0xFF333333))

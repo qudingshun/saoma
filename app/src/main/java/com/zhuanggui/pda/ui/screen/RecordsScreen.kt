@@ -7,10 +7,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,6 +59,7 @@ fun RecordsScreen(
     onOpenGroup: (ScanRecordGroup?) -> Unit,
     onDeleteGroups: (List<ScanRecordGroup>) -> Unit,
     onOpenTrash: () -> Unit,
+    onOpenTsv: () -> Unit,
     onBack: () -> Unit
 ) {
     // 系统返回键：二级 → 一级
@@ -68,6 +71,7 @@ fun RecordsScreen(
             onOpenGroup = { onOpenGroup(it) },
             onDeleteGroups = onDeleteGroups,
             onOpenTrash = onOpenTrash,
+            onOpenTsv = onOpenTsv,
             onBack = onBack
         )
     } else {
@@ -89,6 +93,7 @@ private fun GroupListPage(
     onOpenGroup: (ScanRecordGroup) -> Unit,
     onDeleteGroups: (List<ScanRecordGroup>) -> Unit,
     onOpenTrash: () -> Unit,
+    onOpenTsv: () -> Unit,
     onBack: () -> Unit
 ) {
     var filter by rememberSaveable { mutableStateOf("") }
@@ -162,17 +167,28 @@ private fun GroupListPage(
             }
 
             Text(
-                "按「日期 + 柜号」聚合；点柜号看全部条码，可单个/批量删除（三次确认）；回收站：长按本页标题",
+                "按「日期 + 柜号」聚合；点柜号看全部条码，可单个/批量删除（三次确认）；回收站：长按本页标题；TSV 原文：直接读落盘文件",
                 fontSize = 12.sp, color = Color.Gray
             )
 
-            OutlinedTextField(
-                value = filter,
-                onValueChange = { filter = it },
-                label = { Text("过滤柜号/日期") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedTextField(
+                    value = filter,
+                    onValueChange = { filter = it },
+                    label = { Text("过滤柜号/日期", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = onOpenTsv,
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    modifier = Modifier.height(48.dp)
+                ) { Text("TSV 原文", fontSize = 12.sp) }
+            }
 
             if (batchMode) {
                 val selCount = checked.size

@@ -3,6 +3,7 @@ package com.zhuanggui.pda.ui
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
@@ -19,6 +20,7 @@ import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.data.entity.SyncState
 import com.zhuanggui.pda.export.FileExporter
 import com.zhuanggui.pda.export.RuleExporter
+import com.zhuanggui.pda.log.OpLog
 import com.zhuanggui.pda.importer.RuleSourceImporter
 import com.zhuanggui.pda.net.PairingInfo
 import com.zhuanggui.pda.net.SyncRepository
@@ -284,6 +286,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var recordsJob: Job? = null
     private var containerLookupJob: Job? = null
 
+    /** v1.10.2 双通道去重：同一次扳机在 800ms 内只记一条 */
+    private val scanDeduper = ScanDeduper()
+
     init {
         scanner.register()
         refreshSyncState()
@@ -301,7 +306,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     when {
                         // 装柜进行中 → 正常校验
                         _outboundStage.value == OutboundStage.SCANNING &&
-                            _outbound.value.activeContainer != null -> handleOutboundScan(barcode)
+                            _outbound.value.activeContainer != null -> handleOutboundScan(barcode, "广播")
                         // 设置页 → 扫码填入：工号栏聚焦时填工号（替换），否则填规则栏（完整码，人工删减成前缀）
                         _outboundStage.value == OutboundStage.SETUP ->
                             if (_setupScanTarget.value == SetupScanTarget.OPERATOR) onOperatorIdChange(barcode)
@@ -929,9 +934,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ==================== 出库扫码：扫码校验 ====================
 
-    /** 手动录入（出库扫码页） */
+    /** 手动录入（出库扫码页；只有用户点「手动录入」并确认才会走这里，不接收扫码枪键盘注入） */
     fun manualOutboundScan(barcode: String) {
-        if (barcode.isNotBlank()) handleOutboundScan(barcode.trim())
+        if (barcode.isNotBlank()) handleOutboundScan(barcode.trim(), "手动")
     }
 
     /** 停止报警振动（触屏 / 弹窗确认 / 删除记录等调用；幂等） */
@@ -1017,6 +1022,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 撤回上一步（新扫一枪 → 撤销该枪；删除 → 从回收站恢复） */
     fun undoLastRecordOp() {
         val op = undoStack.removeLastOrNull() ?: return
+        OpLog.info("撤回", "撤销 ${op.ids.size} 条记录")
         viewModelScope.launch {
             outboundMutex.withLock {
                 applyOp(op, isUndo = true)
@@ -1032,6 +1038,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 前进（重做刚撤回的操作） */
     fun redoLastRecordOp() {
         val op = redoStack.removeLastOrNull() ?: return
+        OpLog.info("前进", "重做 ${op.ids.size} 条记录")
         viewModelScope.launch {
             outboundMutex.withLock {
                 applyOp(op, isUndo = false)
@@ -1050,6 +1057,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             outboundMutex.withLock {
                 val rec = recordDao.getById(recordId) ?: return@withLock
                 recordDao.restoreIds(listOf(recordId))
+                OpLog.info("回收站恢复", "单条恢复 id=$recordId")
                 SyncScheduler.requestSync(app)
                 refreshActiveCounts()
                 syncRecordFiles(listOf(pairOf(rec)))
@@ -1064,6 +1072,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val recs = recordDao.getTrash()
                 if (recs.isEmpty()) return@withLock
                 recordDao.restoreAll()
+                OpLog.info("回收站恢复", "全部恢复 ${recs.size} 条")
                 SyncScheduler.requestSync(app)
                 refreshActiveCounts()
                 syncRecordFiles(recs.map { pairOf(it) })
@@ -1078,6 +1087,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val recs = recordDao.getTrash()
                 if (recs.isEmpty()) return@withLock
                 recordDao.emptyTrash()
+                OpLog.warn("回收站清空", "永久删除 ${recs.size} 条")
                 syncRecordFiles(recs.map { pairOf(it) })
             }
         }
@@ -1087,9 +1097,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 出库扫码校验：规则前缀（串号）→ 同柜重复 → 计划装柜数量（超量）→ 正常。
      * 全程持有 outboundMutex：快速连扫按枪序处理，不丢计数；校验与写入之间无并发窗口。
      */
-    private fun handleOutboundScan(raw: String) {
+    private fun handleOutboundScan(raw: String, source: String = "广播") {
         val barcode = raw.trim()
         if (barcode.isEmpty()) return
+
+        // v1.10.2：双通道去重。若扫描配置同时开了「广播 + 键盘」，同一次扳机会在极短时间内到达两遍；
+        // 800ms 内同一串码只记一次（人工复扫通常 >1s，不受影响）。
+        val nowMs = SystemClock.elapsedRealtime()
+        if (scanDeduper.isDuplicate(barcode, nowMs)) {
+            OpLog.warn("扫码去重", "800ms 内同一串码重复到达，已忽略：$barcode（来源=$source）")
+            return
+        }
 
         viewModelScope.launch {
             // 兜底：单枪处理任何异常都只提示、不崩溃，扫码链路保持可用
@@ -1199,6 +1217,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
                     // 每扫一码自动落盘（增量追加一行）
                     val saved = withContext(Dispatchers.IO) { FileExporter.append(record) }
+                    // v1.10.1：每枪留痕（试运行追溯：条码/结果/落盘成败）
+                    OpLog.info(
+                        "扫码",
+                        "柜号=${container.containerNo} 条码=$barcode 结果=$result 来源=$source " +
+                                "落盘=" + (if (saved) "成功" else "失败") +
+                                (FileExporter.lastWriteError?.let { "（$it）" } ?: "")
+                    )
 
                     // 报警反馈（重复/串号/超量 = 循环蜂鸣 + 循环振动，直到被确认/触屏/下一枪/删除）
                     // + 语音朗读（v1.7.0 第 7 条：正常读出「已扫码，N」，辅助码读出「辅助码」）

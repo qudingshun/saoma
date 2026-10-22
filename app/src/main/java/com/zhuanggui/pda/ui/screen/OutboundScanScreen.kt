@@ -32,6 +32,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -494,11 +495,58 @@ fun OutboundScanScreen(
                 }
             }
 
-            // ---------- 扫码录入（HID 扫码枪 / 手动） ----------
-            com.zhuanggui.pda.ui.HidScanField(
-                onSubmit = { onManual(it) },
-                modifier = Modifier.padding(top = 2.dp)
-            )
+            // ---------- 手动录入（v1.10.2：扫码只走广播；键盘注入不再自动记录，避免一枪两条） ----------
+            var showManual by remember { mutableStateOf(false) }
+            var manualText by remember { mutableStateOf("") }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "扫码通道：广播（键盘输入不参与记录）",
+                    fontSize = 10.sp, color = Color.Gray,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = { manualText = ""; showManual = true },
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier.height(34.dp)
+                ) { Text("手动录入", fontSize = 11.sp) }
+            }
+            if (showManual) {
+                AlertDialog(
+                    onDismissRequest = { showManual = false },
+                    title = { Text("手动录入条码", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column {
+                            Text(
+                                "仅在条码破损、扫码枪读不出时使用；输入后点「录入」记一条。",
+                                fontSize = 12.sp, color = Color.Gray
+                            )
+                            OutlinedTextField(
+                                value = manualText,
+                                onValueChange = { manualText = it },
+                                label = { Text("条码") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val v = manualText.trim()
+                                showManual = false
+                                if (v.isNotEmpty()) onManual(v)
+                            },
+                            enabled = manualText.isNotBlank()
+                        ) { Text("录入") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showManual = false }) { Text("取消") }
+                    }
+                )
+            }
 
             // ---------- 记录明细 ----------
             Row(

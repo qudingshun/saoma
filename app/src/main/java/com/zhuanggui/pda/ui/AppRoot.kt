@@ -12,9 +12,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.zhuanggui.pda.ui.screen.HomeScreen
+import com.zhuanggui.pda.ui.screen.OpLogScreen
 import com.zhuanggui.pda.ui.screen.OutboundScanScreen
 import com.zhuanggui.pda.ui.screen.OutboundSetupScreen
 import com.zhuanggui.pda.ui.screen.RecordsScreen
+import com.zhuanggui.pda.ui.screen.TsvReaderScreen
 import com.zhuanggui.pda.ui.screen.RulesScreen
 import com.zhuanggui.pda.ui.screen.ScannerSetupScreen
 import com.zhuanggui.pda.ui.screen.SyncSettingsScreen
@@ -30,6 +32,8 @@ object Routes {
     const val TRASH = "trash"
     const val SYNC = "sync"
     const val SCANNER_SETUP = "scanner_setup"
+    const val OP_LOG = "op_log"
+    const val TSV_READER = "tsv_reader"
 }
 
 @Composable
@@ -64,7 +68,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     vm.refreshSyncState()
                     navController.navigate(Routes.SYNC)
                 },
-                onScannerSetup = { navController.navigate(Routes.SCANNER_SETUP) }
+                onScannerSetup = { navController.navigate(Routes.SCANNER_SETUP) },
+                onOpLog = { navController.navigate(Routes.OP_LOG) }
             )
         }
 
@@ -179,8 +184,14 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onOpenGroup = vm::openRecordGroup,
                 onDeleteGroups = vm::deleteRecordGroups,
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
+                onOpenTsv = { navController.navigate(Routes.TSV_READER) },
                 onBack = { navController.popBackStack() }
             )
+        }
+
+        // ---------- TSV 记录阅读器（原始文件） ----------
+        composable(Routes.TSV_READER) {
+            TsvReaderScreen(onBack = { navController.popBackStack() })
         }
 
         // ---------- 回收站（隐藏入口：记录页长按标题） ----------
@@ -224,6 +235,12 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onExport = vm::exportRuleLibrary,
                 onBack = { navController.popBackStack() }
             )
+        }
+
+
+        // ---------- 操作日志（试运行追溯） ----------
+        composable(Routes.OP_LOG) {
+            OpLogScreen(onBack = { navController.popBackStack() })
         }
 
         // ---------- WiFi 同步（v1.8.0） ----------

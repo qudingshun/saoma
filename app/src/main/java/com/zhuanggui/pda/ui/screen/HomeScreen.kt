@@ -56,7 +56,8 @@ fun HomeScreen(
     onContinueLast: (String) -> Unit,
     onRecords: () -> Unit,
     onSync: () -> Unit,
-    onScannerSetup: () -> Unit
+    onScannerSetup: () -> Unit,
+    onOpLog: () -> Unit
 ) {
     Scaffold { pad ->
         val context = LocalContext.current
@@ -176,6 +177,14 @@ fun HomeScreen(
                 modifier = Modifier
                     .clickable { onScannerSetup() }
                     .padding(top = 6.dp)
+            )
+            Text(
+                "操作日志（试运行追溯 / 导出）",
+                fontSize = 13.sp,
+                color = Color(0xFF1976D2),
+                modifier = Modifier
+                    .clickable { onOpLog() }
+                    .padding(top = 4.dp)
             )
         }
     }

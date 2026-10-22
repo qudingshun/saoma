@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
+import com.zhuanggui.pda.log.OpLog
 import java.io.File
 import java.io.FileOutputStream
 import java.time.Instant
@@ -133,6 +134,7 @@ object FileExporter {
             true
         }.getOrElse {
             Log.w(TAG, "probe failed: ${it.message}")
+            OpLog.warn("存储探测失败", it.message ?: "")
             false
         }
         primaryWritableCache = ok
@@ -260,6 +262,7 @@ object FileExporter {
             "记录保存失败：主目录与暂存目录都不可写（请检查存储空间/权限）"
         }
         Log.w(TAG, lastWriteError ?: "记录写入失败")
+        OpLog.error("落盘失败", lastWriteError ?: "记录写入失败")
         return fb
     }
 
@@ -348,6 +351,7 @@ object FileExporter {
                 "记录文件写入失败（主目录与暂存目录都不可写）"
             }
             Log.w(TAG, lastWriteError ?: "记录文件写入失败")
+            OpLog.error("落盘失败", lastWriteError ?: "记录文件写入失败")
         } else {
             lastWriteError = null
         }
