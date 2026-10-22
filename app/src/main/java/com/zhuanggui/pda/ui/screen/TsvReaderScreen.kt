@@ -189,9 +189,11 @@ fun TsvReaderScreen(onBack: () -> Unit) {
                                         ) {
                                             Text(hit.day, fontSize = 11.sp, color = Color.Gray)
                                             Text(
-                                                "${hit.result}  ${hit.time}",
+                                                if (hit.result.isBlank()) hit.time
+                                                else "${hit.result}  ${hit.time}",
                                                 fontSize = 11.sp,
-                                                color = resultColor(hit.result)
+                                                color = if (hit.result.isBlank()) Color.Gray
+                                                else resultColor(hit.result)
                                             )
                                         }
                                         Text(
@@ -292,7 +294,8 @@ private fun TsvDetail(
         if (q.isBlank()) detail.lines
         else detail.lines.filter {
             it.barcode.contains(q, true) || it.container.contains(q, true) ||
-                it.result.contains(q, true) || it.time.contains(q, true)
+                it.result.contains(q, true) || it.time.contains(q, true) ||
+                it.operator.contains(q, true)
         }
     }
     // 文件按时间顺序落盘，阅读时最新在上
@@ -332,7 +335,7 @@ private fun TsvDetail(
             OutlinedTextField(
                 value = query,
                 onValueChange = onQuery,
-                label = { Text("柜内过滤：条码 / 时间 / 结果", fontSize = 12.sp) },
+                label = { Text("柜内过滤：条码 / 时间 / 柜号 / 操作员", fontSize = 12.sp) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.fillMaxWidth()
@@ -354,18 +357,20 @@ private fun TsvDetail(
                             .padding(vertical = 4.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                line.result,
-                                fontSize = 10.sp,
-                                color = Color.White,
-                                modifier = Modifier
-                                    .background(resultColor(line.result), RoundedCornerShape(3.dp))
-                                    .padding(horizontal = 5.dp, vertical = 1.dp)
-                            )
+                            if (line.result.isNotBlank()) {
+                                Text(
+                                    line.result,
+                                    fontSize = 10.sp,
+                                    color = Color.White,
+                                    modifier = Modifier
+                                        .background(resultColor(line.result), RoundedCornerShape(3.dp))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
                             Text(
                                 line.time,
                                 fontSize = 10.sp, color = Color.Gray,
-                                modifier = Modifier.padding(start = 6.dp)
+                                modifier = Modifier.padding(start = if (line.result.isBlank()) 0.dp else 6.dp)
                             )
                             if (line.operator.isNotBlank()) {
                                 Text(
@@ -380,11 +385,13 @@ private fun TsvDetail(
                             fontSize = 16.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(top = 1.dp)
                         )
-                        Text(
-                            "完整码：${line.fullCode}",
-                            fontSize = 10.sp, color = Color.Gray,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
+                        if (line.fullCode.isNotBlank()) {
+                            Text(
+                                "完整码：${line.fullCode}",
+                                fontSize = 10.sp, color = Color.Gray,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         HorizontalDivider(Modifier.padding(top = 4.dp), thickness = 0.5.dp)
                     }
                 }
@@ -461,24 +468,47 @@ private fun listTsvFiles(root: File): List<TsvFileItem> {
     return out.sortedWith(compareByDescending<TsvFileItem> { it.day }.thenBy { it.container })
 }
 
+/**
+ * 解析本 App 的记录 TSV。
+ * v1.10.4 起为四列（时间/柜号/条码/操作员）；同时兼容旧版六列
+ * （时间/柜号/条码/完整码/结果/操作员）和更早的五列。
+ * 按表头名称取列，不能再用固定下标——四列时第 4 列是操作员，不是完整码。
+ */
 private fun parseTsv(file: File): List<TsvLine> {
     val lines = runCatching { file.readLines(Charsets.UTF_8) }.getOrDefault(emptyList())
+    if (lines.isEmpty()) return emptyList()
+
+    val header = lines.first().removePrefix("\uFEFF").split('\t').map { it.trim() }
+    val hasHeader = header.any { it == "时间" || it == "条码" || it == "柜号" }
+    val dataStart = if (hasHeader) 1 else 0
+    fun column(name: String, fallback: Int): Int {
+        val i = header.indexOfFirst { it == name }
+        return if (i >= 0) i else fallback
+    }
+
+    val timeIndex = column("时间", 0)
+    val containerIndex = column("柜号", 1)
+    val barcodeIndex = column("条码", 2)
+    val fullCodeIndex = column("完整码", -1)
+    val resultIndex = column("结果", -1)
+    val operatorIndex = column("操作员", if (hasHeader) -1 else 5)
+
     val out = ArrayList<TsvLine>(lines.size)
     lines.forEachIndexed { idx, raw ->
+        if (idx < dataStart) return@forEachIndexed
         val line = raw.removePrefix("\uFEFF")
         if (line.isBlank()) return@forEachIndexed
-        // 跳过表头
-        if (idx == 0 && line.startsWith("时间")) return@forEachIndexed
         val c = line.split('\t')
+        fun cell(index: Int): String = if (index in c.indices) c[index] else ""
         out.add(
             TsvLine(
                 index = idx,
-                time = c.getOrElse(0) { "" },
-                container = c.getOrElse(1) { "" },
-                barcode = c.getOrElse(2) { "" },
-                fullCode = c.getOrElse(3) { "" },
-                result = c.getOrElse(4) { "" },
-                operator = c.getOrElse(5) { "" }
+                time = cell(timeIndex),
+                container = cell(containerIndex),
+                barcode = cell(barcodeIndex),
+                fullCode = cell(fullCodeIndex),
+                result = cell(resultIndex),
+                operator = cell(operatorIndex)
             )
         )
     }
@@ -493,22 +523,16 @@ private fun searchAll(root: File, query: String, limit: Int): List<TsvHit> {
         val fs = dayDir.listFiles { f -> f.isFile && f.extension.equals("tsv", true) }
             ?.sortedBy { it.name } ?: continue
         for (f in fs) {
-            val lines = runCatching { f.readLines(Charsets.UTF_8) }.getOrDefault(emptyList())
-            lines.forEachIndexed { idx, raw ->
+            for (line in parseTsv(f)) {
                 if (out.size >= limit) return out
-                val line = raw.removePrefix("\uFEFF")
-                if (line.isBlank() || (idx == 0 && line.startsWith("时间"))) return@forEachIndexed
-                val c = line.split('\t')
-                val barcode = c.getOrElse(2) { "" }
-                val container = c.getOrElse(1) { "" }
-                if (barcode.contains(query, true) || container.contains(query, true)) {
+                if (line.barcode.contains(query, true) || line.container.contains(query, true)) {
                     out.add(
                         TsvHit(
                             file = f, day = dayDir.name, container = f.nameWithoutExtension,
-                            index = idx,
-                            time = c.getOrElse(0) { "" },
-                            barcode = barcode,
-                            result = c.getOrElse(4) { "" }
+                            index = line.index,
+                            time = line.time,
+                            barcode = line.barcode,
+                            result = line.result
                         )
                     )
                 }

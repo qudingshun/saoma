@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "ZhuangGui"
 include(":app")
+include(":tsv-reader")

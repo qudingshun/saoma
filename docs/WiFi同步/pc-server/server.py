@@ -170,16 +170,7 @@ def next_task_rev(conn) -> int:
 # ---------------- 电脑端 TSV 落盘（按日期 / 柜号，和 PDA 本地文件同格式） ----------------
 RECORD_DIR = DATA / "装柜记录"
 TRASH_DIR = DATA / "回收站"
-TSV_HEADER = "\ufeff时间\t柜号\t条码\t完整码\t结果\t操作员\n"
-
-RESULT_LABELS = {
-    "OK": "正常",
-    "NOT_IN_LIST": "不在清单",
-    "OVER_LIMIT": "超量",
-    "SERIAL_MISMATCH": "串号",
-    "DUPLICATE": "重复",
-    "AUX": "辅助",
-}
+TSV_HEADER = "\ufeff时间\t柜号\t条码\t操作员\n"
 
 
 def _record_time(raw: str) -> tuple[str, str]:
@@ -281,13 +272,10 @@ def _write_tsv(path: Path, rows: list[sqlite3.Row]) -> None:
     parts = [TSV_HEADER]
     for r in rows:
         _, shown = _record_time(r["scanned_at"])
-        result = (r["result"] or "").upper()
         parts.append("\t".join([
             shown,
             r["container_no"] or "",
             r["barcode"] or "",
-            r["full_code"] or "",
-            RESULT_LABELS.get(result, r["result"] or ""),
             r["operator_id"] or "",
         ]) + "\n")
     tmp = path.with_name(path.name + ".tmp")

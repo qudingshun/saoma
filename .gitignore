@@ -1,6 +1,12 @@
 *.iml
 .gradle
 .kotlin
+__pycache__/
+*.pyc
+/docs/WiFi同步/pc-server/.venv/
+/docs/WiFi同步/pc-server/build/
+/docs/WiFi同步/pc-server/dist/
+/docs/WiFi同步/pc-server/*.spec
 /.idea
 .DS_Store
 build/
@@ -20,3 +26,5 @@ keystore.properties
 /成品出库_交付包_2026-10-20/
 /成品出库_交付包_2026-10-20.zip
 /装柜同步服务_v1.3_win64.zip
+/TSV阅读器_交付_2026-10-22/
+/TSV阅读器_交付_2026-10-22.zip

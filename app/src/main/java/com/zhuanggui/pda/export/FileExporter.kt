@@ -10,10 +10,11 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.zhuanggui.pda.data.entity.ScanRecord
-import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.log.OpLog
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -27,6 +28,10 @@ import java.util.Locale
  *   /sdcard/zhuanggui/回收站/yyyy-MM-dd/柜号.tsv     —— 已删除（软删除）记录
  *   /sdcard/zhuanggui/装柜完成汇总.tsv               —— 每装齐一柜追加一行汇总
  *   /sdcard/zhuanggui/规则库/…                      —— 规则库导出 / 备份
+ *
+ * 记录明细（v1.10.4 起）只有四列：时间、柜号、条码、操作员。
+ * 完整码和判定结果仍保存在数据库，用于界面显示、统计、报警与回收站；
+ * 落盘文件不再写入这两列。旧版六列文件会在启动或下次追加时自动迁移。
  *
  * 写入策略（三层保险，**任何情况下不丢记录**）：
  *  1) 主目录 /sdcard/zhuanggui（现场可见、可 U 盘拷贝）；
@@ -63,7 +68,7 @@ object FileExporter {
     private fun fmtDate(d: Date): String = dayFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
     private fun fmtTime(d: Date): String = timeFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
 
-    private const val HEADER = "时间\t柜号\t条码\t完整码\t结果\t操作员\n"
+    private const val HEADER = "时间\t柜号\t条码\t操作员\n"
     private const val SUMMARY_HEADER = "完成时间\t柜号\t计划数量\t正常\t串号\t重复\t超量\t记录总数\t操作员\n"
 
     @Volatile
@@ -209,23 +214,42 @@ object FileExporter {
     private fun safeName(containerNo: String): String =
         containerNo.replace(Regex("[\\\\/:*?\"<>|]"), "_")
 
-    /** 一行记录（TSV：制表符分隔） */
+    /** 一行记录（TSV：制表符分隔；v1.10.4 起只保留四列） */
     private fun lineOf(record: ScanRecord): String = buildString {
         append(fmtTime(record.scannedAt))
         append('\t'); append(record.containerNo)
         append('\t'); append(record.barcode)
-        append('\t'); append(record.fullCode)
-        append('\t'); append(resultText(record.result))
         append('\t'); append(record.operatorId)
         append('\n')
     }
 
+    /**
+     * 原子写入：先写同目录临时文件，再替换目标文件。
+     * 避免 Excel/文件管理器恰好打开时读到半截文件。
+     */
+    private fun writeAtomically(file: File, text: String) {
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, ".${file.name}.tmp")
+        tmp.outputStream().use { it.write(text.toByteArray(Charsets.UTF_8)) }
+        try {
+            Files.move(
+                tmp.toPath(),
+                file.toPath(),
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (e: Exception) {
+            // 个别 sdcardfs / 被杀进程残留场景不支持 move，退回覆盖写
+            Log.w(TAG, "atomic move failed, fallback copy: ${e.message}")
+            tmp.copyTo(file, overwrite = true)
+            tmp.delete()
+        }
+    }
+
     /** 重写整个文件：BOM + 表头 + 按扫描时间排序的记录 */
     private fun writeAll(file: File, records: List<ScanRecord>) {
-        file.parentFile?.mkdirs()
         val sb = StringBuilder("\uFEFF$HEADER")
         records.sortedWith(compareBy({ it.scannedAt.time }, { it.id })).forEach { sb.append(lineOf(it)) }
-        file.outputStream().use { it.write(sb.toString().toByteArray(Charsets.UTF_8)) }
+        writeAtomically(file, sb.toString())
     }
 
     private fun appendTo(base: File, record: ScanRecord): Boolean = runCatching {
@@ -234,9 +258,10 @@ object FileExporter {
         if (!dir.exists() && !dir.mkdirs()) return false
         val file = File(dir, "${safeName(record.containerNo)}.tsv")
         if (!file.exists()) {
-            file.outputStream().use { it.write("\uFEFF$HEADER".toByteArray(Charsets.UTF_8)) }
-        } else {
-            upgradeHeaderIfNeeded(file)
+            writeAtomically(file, "\uFEFF$HEADER")
+        } else if (upgradeHeaderIfNeeded(file) == HeaderState.UNKNOWN) {
+            Log.w(TAG, "append skipped: unrecognized header in ${file.absolutePath}")
+            return false
         }
         FileOutputStream(file, true).use { it.write(lineOf(record).toByteArray(Charsets.UTF_8)) }
         true
@@ -249,6 +274,7 @@ object FileExporter {
      * 增量追加一条记录。返回 true=写入成功（主目录或兜底目录）。
      * 主目录失败 → 自动写兜底目录，并记录原因（界面提示），**不丢记录**。
      */
+    @Synchronized
     fun append(record: ScanRecord): Boolean {
         if (appendTo(externalRoot(), record)) {
             lastWriteError = null
@@ -266,25 +292,81 @@ object FileExporter {
         return fb
     }
 
+    private enum class HeaderState { CANONICAL, MIGRATED, UNKNOWN }
+
     /**
-     * v1.6.0：旧版记录文件（表头无「操作员」列）首次追加时升级表头。
-     * 数据行原样保留，老行末尾补一个空操作员列（不丢任何已扫记录）。
+     * v1.10.4：旧版文件升级为四列。
+     *
+     * 兼容 v1.6.0 的六列（时间/柜号/条码/完整码/结果/操作员）和更早的五列
+     * （无操作员）。按表头名称取「时间/柜号/条码/操作员」，丢弃完整码和结果；
+     * 数据行一条不丢。无法识别的 TSV 原样保留，避免误改别的文件。
      */
-    private fun upgradeHeaderIfNeeded(file: File) {
+    private fun upgradeHeaderIfNeeded(file: File): HeaderState {
         val firstLine = runCatching {
             file.bufferedReader(Charsets.UTF_8).use { it.readLine() }
-        }.getOrNull() ?: return
-        if (firstLine.removePrefix("\uFEFF") == HEADER.trimEnd('\n')) return
-        val lines = file.readLines(Charsets.UTF_8)
+        }.getOrElse { return HeaderState.UNKNOWN }
+        if (firstLine == null) {
+            writeAtomically(file, "\uFEFF$HEADER")
+            return HeaderState.MIGRATED
+        }
+        val headerLine = firstLine.removePrefix("\uFEFF").trimEnd('\r')
+        if (headerLine == HEADER.trimEnd('\n')) return HeaderState.CANONICAL
+
+        val lines = runCatching { file.readLines(Charsets.UTF_8) }.getOrNull()
+            ?: return HeaderState.UNKNOWN
+        val header = headerLine.split('\t').map { it.trim() }
+        val timeIndex = header.indexOf("时间")
+        val containerIndex = header.indexOf("柜号")
+        val barcodeIndex = header.indexOf("条码")
+        if (timeIndex < 0 || containerIndex < 0 || barcodeIndex < 0) {
+            return HeaderState.UNKNOWN
+        }
+        val operatorIndex = header.indexOf("操作员")
+
         val sb = StringBuilder("\uFEFF$HEADER")
-        lines.drop(1).forEach { sb.append(it).append('\t').append('\n') }
-        file.outputStream().use { it.write(sb.toString().toByteArray(Charsets.UTF_8)) }
+        lines.drop(1).forEach { rawLine ->
+            if (rawLine.isBlank()) return@forEach
+            val cells = rawLine.split('\t')
+            fun cell(index: Int): String = if (index in cells.indices) cells[index] else ""
+            sb.append(cell(timeIndex)).append('\t')
+                .append(cell(containerIndex)).append('\t')
+                .append(cell(barcodeIndex)).append('\t')
+                .append(if (operatorIndex >= 0) cell(operatorIndex) else "")
+                .append('\n')
+        }
+        writeAtomically(file, sb.toString())
+        return HeaderState.MIGRATED
+    }
+
+    /**
+     * 启动时迁移主目录 / 兜底目录下已有的旧版 TSV（六列 → 四列）。
+     * 返回实际改写的文件数；无法识别的文件不动。
+     */
+    @Synchronized
+    fun migrateRecordFiles(): Int {
+        val roots = listOf(
+            rootDir(),
+            trashRootDir(),
+            recordDirOf(fallbackBase()),
+            trashDirOf(fallbackBase())
+        )
+        var migrated = 0
+        roots.forEach { root ->
+            if (!root.exists()) return@forEach
+            root.walkTopDown()
+                .filter { it.isFile && it.extension.equals("tsv", ignoreCase = true) }
+                .forEach { file ->
+                    if (upgradeHeaderIfNeeded(file) == HeaderState.MIGRATED) migrated++
+                }
+        }
+        return migrated
     }
 
     /**
      * 装柜完成（正常数首次达到计划装柜数量）时，把本柜统计追加一行到
      * /sdcard/zhuanggui/装柜完成汇总.tsv（单文件累积；BOM 表头只在文件首次创建时写入）。
      */
+    @Synchronized
     fun appendCompletion(
         containerNo: String,
         total: Int,
@@ -341,6 +423,7 @@ object FileExporter {
      *  - 回收站文件   = [deleted]（空则删除文件 → 等价于整组移回）
      *  - 两侧都空（清空回收站）= 永久删除，旧 CSV 也一并清理
      */
+    @Synchronized
     fun syncDay(dayLabel: String, containerNo: String, active: List<ScanRecord>, deleted: List<ScanRecord>) {
         val done = syncDayInto(externalRoot(), dayLabel, containerNo, active, deleted)
         if (!done) {
@@ -403,6 +486,7 @@ object FileExporter {
      * v1.10.0：按数据库全量重建记录文件（修「已扫但没落盘」的历史缺口）。
      * 返回写出的文件数。
      */
+    @Synchronized
     fun rebuildFromRecords(records: List<ScanRecord>): Int {
         if (records.isEmpty()) return 0
         val groups = records.groupBy { fmtDate(it.scannedAt) to it.containerNo }
@@ -421,6 +505,7 @@ object FileExporter {
      * 把兜底目录里暂存的记录搬回主目录 /sdcard/zhuanggui。
      * 返回搬回的文件数；主目录仍不可写时返回 0（记录保留在暂存目录）。
      */
+    @Synchronized
     fun exportFallbackToPrimary(): Int {
         if (!primaryWritable()) return 0
         val base = fallbackBase()
@@ -442,14 +527,5 @@ object FileExporter {
             primaryWritableCache = null
         }
         return count
-    }
-
-    private fun resultText(r: ScanResult): String = when (r) {
-        ScanResult.OK -> "正常"
-        ScanResult.NOT_IN_LIST -> "不在清单"
-        ScanResult.OVER_LIMIT -> "超量"
-        ScanResult.SERIAL_MISMATCH -> "串号"
-        ScanResult.DUPLICATE -> "重复"
-        ScanResult.AUX -> "辅助"
     }
 }

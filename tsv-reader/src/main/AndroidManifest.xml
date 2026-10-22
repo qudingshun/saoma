@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 文件管理器用 file:// 方式打开时需要；content:// 方式由文件管理器授权，无需此权限 -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher_tsv"
+        android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TsvReader">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:keepScreenOn="true"
+            android:configChanges="keyboardHidden|orientation|screenSize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- 文件管理器「打开方式」：常见 TSV / 文本 MIME -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/tab-separated-values" />
+                <data android:mimeType="text/tsv" />
+                <data android:mimeType="application/x-tsv" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/vnd.ms-excel" />
+            </intent-filter>
+
+            <!-- 部分文件管理器按 file:// + 扩展名匹配 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.tsv" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.TSV" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.txt" />
+            </intent-filter>
+
+            <!-- 系统「文件」App 常用 content://，路径里通常保留 .tsv 文件名 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.tsv" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.TSV" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.txt" />
+            </intent-filter>
+
+            <!-- 部分文件管理器把未知扩展名当作 */* 传递，只要 URI 路径仍以 .tsv/.txt 结尾也允许打开 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.tsv" />
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.TSV" />
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.txt" />
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.tsv" />
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.TSV" />
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.txt" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
