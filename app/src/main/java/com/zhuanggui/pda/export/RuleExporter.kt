@@ -12,8 +12,9 @@ import java.util.zip.ZipOutputStream
 /**
  * 规则库导出（v1.7.5）：XLSX（Excel），方便查看/对齐/维护，并可原样导入其他 PDA。
  *
- * 列：型号名称 / 前缀 / 可重复扫 / 计入统计 / 查历史串号 / 忽略（是/否）
+ * 列：型号名称 / 前缀 / 可重复扫 / 计入统计 / 查历史串号 / 忽略（是/否）/ 默认装柜数量
  * - 以型号为组：先列型号，再列该型号下的前缀规则（每个前缀一行，可逐条维护）
+ * - v16：默认装柜数量按型号只维护 1 个；导出时同一型号的每一行都写该型号的默认值
  * - 空型号也会导出一行（前缀为空），导入时用于建空型号
  *
  * 说明：为兼容 Android（POI 写 XLSX 依赖 java.awt，现场机不可用），
@@ -28,7 +29,9 @@ object RuleExporter {
     private val timeFormat: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.US)
 
-    private val HEADERS = listOf("型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略")
+    private val HEADERS = listOf(
+        "型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略", "默认装柜数量"
+    )
 
     fun displayDir(): String = "/sdcard/$DIR"
 
@@ -81,6 +84,8 @@ object RuleExporter {
         val names = (models.map { it.name } + rules.map { it.name }.filter { it.isNotBlank() })
             .distinct()
             .sorted()
+        // v16：默认装柜数量按型号维护 1 个；导出时同一型号的每一行都写该型号的默认值，便于旧版导入兼容。
+        val modelDefaults = models.associate { it.name to it.defaultQuantity }
 
         val rows = mutableListOf<List<String>>()
         fun addRow(name: String, e: RuleLibEntry?) {
@@ -91,7 +96,8 @@ object RuleExporter {
                     yesNo(e?.allowDuplicate ?: false),
                     yesNo(e?.countEnabled ?: true),
                     yesNo(e?.checkHistory ?: false),
-                    yesNo(e?.ignoreRepeat ?: false)
+                    yesNo(e?.ignoreRepeat ?: false),
+                    (modelDefaults[name] ?: 0).toString()
                 )
             )
         }
@@ -128,6 +134,7 @@ object RuleExporter {
         sb.append("""<col min="1" max="1" width="22" customWidth="1"/>""")
         sb.append("""<col min="2" max="2" width="18" customWidth="1"/>""")
         sb.append("""<col min="3" max="6" width="10" customWidth="1"/>""")
+        sb.append("""<col min="7" max="7" width="14" customWidth="1"/>""")
         sb.append("""</cols><sheetData>""")
 
         // 表头（加粗样式 s=1）

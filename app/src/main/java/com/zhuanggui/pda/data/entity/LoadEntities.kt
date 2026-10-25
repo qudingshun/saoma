@@ -107,6 +107,7 @@ data class ScanRecord(
  *  - [checkHistory] 查历史串号：条码在其他柜出现过 → 报串号（防混柜）
  *  - [ignoreRepeat] 忽略（仅“可重复扫”时生效）：扫到不记录、不落盘、不计数（语音仍报“辅助码”）
  * 前缀唯一；柜子的规则仍以快照形式存在 [LoadRule]（装柜时从库复制，之后改动库不回溯）。
+ * 默认装柜数量在 [RuleModel]（型号级，v16），同一型号下所有规则共用 1 个值。
  */
 @Entity(
     tableName = "rule_library",
@@ -136,5 +137,6 @@ data class RuleLibEntry(
 data class RuleModel(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
+    val defaultQuantity: Int = 0,             // 默认装柜数量（v16；按型号只维护 1 个，0 = 不自动填计划）
     val updatedAt: Date = Date()
 )

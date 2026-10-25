@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -22,8 +23,9 @@ import org.junit.runner.RunWith
  *  - v11 → v12：load_rules 加 serialTailLen（末尾流水号位数，默认 0 = 旧行为）
  *  - v12 → v13：新增 rule_models（型号），现有规则里的型号名称去重回填
  *  - v13 → v14：scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox（WiFi 同步）
- *  - v5 → v14 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→14 并按 14.json 校验。
+ *  - v15 → v16：默认装柜数量归并到 rule_models，rule_library 去掉该列，移除 scan_setup_templates
+ *  - v5 → v16 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→16 并按 16.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -244,9 +246,60 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v14 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v15（有 schema）→ v16：默认数量归并到型号，规则库去掉该列，设置方案表移除 */
     @Test
-    fun migrate5To14_fullChain() {
+    fun migrate15To16_movesDefaultQuantityToModel() {
+        helper.createDatabase(TEST_DB, 15).use { db ->
+            db.execSQL(
+                "INSERT INTO rule_models (name, updatedAt) VALUES ('T45LW', 1730000000000)"
+            )
+            db.execSQL(
+                "INSERT INTO rule_library (prefix, name, allowDuplicate, countEnabled, checkHistory, " +
+                    "ignoreRepeat, defaultQuantity, updatedAt) " +
+                    "VALUES ('ASV12', 'T45LW', 0, 1, 0, 0, 260, 1730000000000)"
+            )
+            db.execSQL(
+                "INSERT INTO scan_setup_templates (name, totalQuantity, rulesJson, updatedAt) " +
+                    "VALUES ('旧方案', 260, '[]', 1730000000000)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, AppDatabase.ALL_MIGRATIONS[14])
+        try {
+            db.query("SELECT defaultQuantity FROM rule_models WHERE name = 'T45LW'").use { c ->
+                c.moveToFirst()
+                assertEquals(260, c.getInt(0))
+            }
+            db.query("SELECT prefix, name, countEnabled FROM rule_library LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals("ASV12", c.getString(0))
+                assertEquals("T45LW", c.getString(1))
+                assertEquals(1, c.getInt(2))
+            }
+            // 规则库不应再有 defaultQuantity 列
+            var hasDefaultColumn = false
+            db.query("PRAGMA table_info(rule_library)").use { c ->
+                while (c.moveToNext()) {
+                    if (c.getString(c.getColumnIndexOrThrow("name")) == "defaultQuantity") {
+                        hasDefaultColumn = true
+                    }
+                }
+            }
+            assertFalse(hasDefaultColumn)
+            db.query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'scan_setup_templates'"
+            ).use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v16 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To16_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -311,9 +364,9 @@ class MigrationTest {
             db.version = 5
         }
 
-        // 跑 5→6→…→14（起点无 schema JSON，drop 校验传 false），结束后按 14.json 全量校验
+        // 跑 5→6→…→16（起点无 schema JSON，drop 校验传 false），结束后按 16.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 14, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 13)
+            TEST_DB, 16, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 15)
         )
         try {
             // 数据保留
@@ -362,6 +415,17 @@ class MigrationTest {
             }
             // v14 同步列：历史记录 uid 全部回填
             db.query("SELECT COUNT(*) FROM scan_records WHERE uid = ''").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+            // v16：默认数量归并到型号（旧数据默认 0），设置方案表已移除
+            db.query("SELECT defaultQuantity FROM rule_models WHERE name = '型号五'").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+            db.query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'scan_setup_templates'"
+            ).use { c ->
                 c.moveToFirst()
                 assertEquals(0, c.getInt(0))
             }

@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.zhuanggui.pda.data.entity.RuleLibEntry
+import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.ui.CompactTextField
 import com.zhuanggui.pda.ui.OutboundSetupState
 import com.zhuanggui.pda.ui.RuleSpec
@@ -77,6 +78,7 @@ import com.zhuanggui.pda.ui.SetupScanTarget
 fun OutboundSetupScreen(
     state: OutboundSetupState,
     library: List<RuleLibEntry>,
+    ruleModels: List<RuleModel>,
     onContainerNo: (String) -> Unit,
     onTotal: (String) -> Unit,
     onOperatorId: (String) -> Unit,
@@ -95,12 +97,16 @@ fun OutboundSetupScreen(
     onRuleSerial: (String, String, String, Int) -> Unit,
     onAddRules: (List<String>) -> Unit,
     onOpenRuleLibrary: () -> Unit,
+    saveMessage: String?,
+    onSaveToRuleLibrary: (String) -> Unit,
+    onSaveMessageShown: () -> Unit,
     onStart: () -> Unit,
     onBack: () -> Unit
 ) {
     var showPicker by remember { mutableStateOf(false) }
     var operatorMenu by remember { mutableStateOf(false) }
     var showRuleHelp by remember { mutableStateOf(false) }
+    var showSaveToLibrary by remember { mutableStateOf(false) }
     // 非空 = 正在补录/修改该规则的流水号范围
     var serialRule by remember { mutableStateOf<RuleSpec?>(null) }
 
@@ -118,12 +124,37 @@ fun OutboundSetupScreen(
     if (showPicker) {
         RulePickerDialog(
             library = library,
+            models = ruleModels,
             alreadyIn = state.rules.map { it.prefix },
             onConfirm = { picked ->
                 onAddRules(picked)
                 showPicker = false
             },
             onDismiss = { showPicker = false }
+        )
+    }
+
+    if (showSaveToLibrary) {
+        SaveToRuleLibraryDialog(
+            ruleCount = state.rules.size,
+            plan = state.totalQuantity.toIntOrNull() ?: 0,
+            existingNames = (ruleModels.map { it.name } + library.map { it.name }).toSet(),
+            onDismiss = { showSaveToLibrary = false },
+            onSave = { name ->
+                onSaveToRuleLibrary(name)
+                showSaveToLibrary = false
+            }
+        )
+    }
+
+    saveMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = onSaveMessageShown,
+            title = { Text("保存到规则库") },
+            text = { Text(msg, fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = onSaveMessageShown) { Text("知道了") }
+            }
         )
     }
 
@@ -391,6 +422,16 @@ fun OutboundSetupScreen(
                 }
             }
 
+            // v16：当前设置直接保存到规则库型号；以后用「从规则库选择」载入
+            OutlinedButton(
+                onClick = { showSaveToLibrary = true },
+                enabled = state.rules.isNotEmpty(),
+                contentPadding = PaddingValues(horizontal = 6.dp),
+                modifier = Modifier.fillMaxWidth().height(34.dp)
+            ) {
+                Text("保存到规则库", fontSize = 11.sp)
+            }
+
             Button(
                 onClick = onStart,
                 enabled = state.containerNo.isNotBlank() && state.rules.isNotEmpty(),
@@ -592,12 +633,14 @@ private fun RuleSerialDialog(
 @Composable
 private fun RulePickerDialog(
     library: List<RuleLibEntry>,
+    models: List<RuleModel>,
     alreadyIn: List<String>,
     onConfirm: (List<String>) -> Unit,
     onDismiss: () -> Unit
 ) {
     var filter by remember { mutableStateOf("") }
     var checkedPrefixes by remember { mutableStateOf(setOf<String>()) }
+    val modelDefaults = models.associate { it.name to it.defaultQuantity }
 
     val filtered = if (filter.isBlank()) library
     else library.filter {
@@ -658,6 +701,11 @@ private fun RulePickerDialog(
                                             if (isNotEmpty()) append("  ")
                                             append(it)
                                         }
+                                        val qty = modelDefaults[entry.name] ?: 0
+                                        if (qty > 0) {
+                                            if (isNotEmpty()) append("  ")
+                                            append("默认 $qty 件")
+                                        }
                                     }
                                     if (detail.isNotBlank()) {
                                         Text(detail, fontSize = 12.sp, color = Color.Gray)
@@ -687,6 +735,55 @@ private fun RulePickerDialog(
                 onClick = { onConfirm(checkedPrefixes.toList()) },
                 enabled = checkedPrefixes.isNotEmpty()
             ) { Text("添加选中（${checkedPrefixes.size}）") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** 把当前设置保存为规则库型号：型号名称 + 当前规则 + 型号级默认数量 */
+@Composable
+private fun SaveToRuleLibraryDialog(
+    ruleCount: Int,
+    plan: Int,
+    existingNames: Set<String>,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    val exists = name.trim().isNotEmpty() && existingNames.any { it == name.trim() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("保存到规则库", fontSize = 18.sp) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(40) },
+                    label = { Text("型号名称（如 T45LW）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "将把当前 $ruleCount 条规则（前缀 + 四个开关）保存为该型号，计划装柜数量 " +
+                        (if (plan > 0) "$plan 件" else "不限") + " 作为该型号的默认数量。\n" +
+                        "流水号范围 / 末尾位数只在本柜有效，不写入规则库。\n" +
+                        "以后在设置页点「从规则库选择」选该型号即可载入。",
+                    fontSize = 11.sp, color = Color.Gray,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                if (exists) {
+                    Text(
+                        "型号「${name.trim()}」已存在：保存后会覆盖该型号原有规则，其他型号不受影响。",
+                        fontSize = 11.sp, color = Color(0xFFD32F2F),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name) }, enabled = name.isNotBlank()) {
+                Text(if (exists) "覆盖保存" else "保存")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )

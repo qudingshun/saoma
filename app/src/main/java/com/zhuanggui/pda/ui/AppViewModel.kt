@@ -207,6 +207,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 设置页扫码键填入口（工号栏聚焦 = OPERATOR，其余 = 规则栏）；由界面焦点变化驱动 */
     private val _setupScanTarget = MutableStateFlow(SetupScanTarget.RULE)
 
+    /**
+     * 规则库「添加/编辑规则」弹窗打开时，扫码优先填入该弹窗的前缀栏（v15）。
+     * 界面用 DisposableEffect 开关；关闭后清空缓冲，避免下一枪误填。
+     */
+    private val _ruleScanActive = MutableStateFlow(false)
+    private val _ruleScanData = MutableStateFlow<String?>(null)
+    val ruleScanData: StateFlow<String?> = _ruleScanData.asStateFlow()
+
+    /** 设置页「保存到规则库」（v16）：保存结果提示 */
+    private val _setupLibMessage = MutableStateFlow<String?>(null)
+    val setupLibMessage: StateFlow<String?> = _setupLibMessage.asStateFlow()
+
     /** 操作员工号：记住上次填写（首页进入设置页时预填，避免每柜重输） */
     private val operatorPrefs = application.getSharedPreferences("operator_prefs", Context.MODE_PRIVATE)
 
@@ -301,6 +313,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         _pairing.value = false
                         _syncUi.update { it.copy(pairing = false) }
                         pairWithCode(barcode)
+                        return@collect
+                    }
+                    // 规则库添加/编辑弹窗打开 → 扫码内容填入该弹窗的前缀栏
+                    if (_ruleScanActive.value) {
+                        _ruleScanData.value = barcode.trim()
                         return@collect
                     }
                     when {
@@ -668,6 +685,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setupScanTarget.value = target
     }
 
+    /** 规则编辑弹窗：打开时扫码填前缀；关闭时解除并清空未消费的扫码内容 */
+    fun setRuleScanActive(active: Boolean) {
+        _ruleScanActive.value = active
+        if (!active) _ruleScanData.value = null
+    }
+
+    fun consumeRuleScanData() {
+        _ruleScanData.value = null
+    }
+
     fun onRuleInputChange(v: String) {
         _setup.update { it.copy(ruleInput = v.filter { c -> c.isLetterOrDigit() }.uppercase()) }
     }
@@ -779,19 +806,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (prefixes.isEmpty()) return
         viewModelScope.launch {
             val lib = ruleLibDao.getAll().associateBy { it.prefix }
+            val picked = prefixes.mapNotNull { lib[it] }
+            // v16：默认装柜数量在型号上只维护 1 个；勾选的规则来自同一默认值（且 >0）时自动填入计划，
+            // 已手工填写计划则不覆盖。
+            val modelDefaults = ruleModelDao.getAll().associate { it.name to it.defaultQuantity }
+            val defaults = picked.map { modelDefaults[it.name] ?: 0 }.filter { it > 0 }.distinct()
+            val defaultPlan = defaults.singleOrNull()
             _setup.update { s ->
                 val existing = s.rules.map { it.prefix }.toSet()
-                s.copy(rules = s.rules + prefixes.filterNot { it in existing }.map { p ->
-                    val e = lib[p]
-                    if (e == null) RuleSpec(p)
-                    else RuleSpec(
-                        prefix = e.prefix,
-                        allowDuplicate = e.allowDuplicate,
-                        countEnabled = e.countEnabled,
-                        checkHistory = e.checkHistory,
-                        ignoreRepeat = e.allowDuplicate && e.ignoreRepeat
-                    )
-                })
+                s.copy(
+                    rules = s.rules + prefixes.filterNot { it in existing }.map { p ->
+                        val e = lib[p]
+                        if (e == null) RuleSpec(p)
+                        else RuleSpec(
+                            prefix = e.prefix,
+                            allowDuplicate = e.allowDuplicate,
+                            countEnabled = e.countEnabled,
+                            checkHistory = e.checkHistory,
+                            ignoreRepeat = e.allowDuplicate && e.ignoreRepeat
+                        )
+                    },
+                    totalQuantity = if ((s.totalQuantity.isBlank() || s.totalQuantity == "0") &&
+                        defaultPlan != null
+                    ) defaultPlan.toString() else s.totalQuantity
+                )
             }
         }
     }
@@ -799,28 +837,127 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 从首页进入出库扫码设置页：整页空白（不保留上次柜号/数量/规则；操作员工号预填上次填写） */
     fun resetOutboundSetup() {
         alarm.stop()
+        containerLookupJob?.cancel()
+        recordsJob?.cancel()
         _outboundStage.value = OutboundStage.SETUP
         _setupScanTarget.value = SetupScanTarget.RULE
+        _outbound.value = OutboundScanState()
+        _outboundRecords.value = emptyList()
+        undoStack.clear()
+        redoStack.clear()
+        syncUndoState()
         _setup.value = OutboundSetupState(
             operatorId = operatorPrefs.getString(KEY_LAST_OPERATOR, "") ?: ""
         )
     }
 
+    // ---------- 设置页「保存到规则库」（v16） ----------
+
     /**
-     * 扫码页「返回设置」：柜号 / 计划装柜数量 / 规则原样保留（无需重新选择/录入）；
-     * 「已扫码数量」同步为本会话已装数（只读展示）；「计划装柜数量」回显本次会话实际计划（v1.7.0）。
-     * 若本柜已装齐（正常数 ≥ 计划装柜数量）→ 清空规则：该柜号再装按全新柜处理。
+     * 把设置页当前规则保存为规则库中的一个型号：
+     *  - 型号名称 = 用户输入；计划装柜数量 = 该型号的默认装柜数量（一个型号只维护 1 个）
+     *  - 当前规则的前缀 / 四个开关写入该型号；同型号会覆盖原有规则
+     *  - 之后在设置页用「从规则库选择」即可载入，不再单独保存设置方案
+     *  - 流水号范围 / 末尾位数属于本柜设置，规则库不保存
+     */
+    fun saveSetupToRuleLibrary(name: String) {
+        val n = name.trim().take(40)
+        if (n.isEmpty()) {
+            _setupLibMessage.value = "请输入型号名称"
+            return
+        }
+        val s = _setup.value
+        if (s.rules.isEmpty()) {
+            _setupLibMessage.value = "当前没有条码规则，无法保存到规则库"
+            return
+        }
+        val plan = (s.totalQuantity.toIntOrNull() ?: 0).coerceIn(0, 999_999)
+        viewModelScope.launch {
+            val now = Date()
+            val oldModels = ruleModelDao.getAll()
+            val oldRules = ruleLibDao.getAll()
+            val existingModel = oldModels.firstOrNull { it.name == n }
+            val oldByPrefix = oldRules.associateBy { it.prefix }
+            val conflicts = s.rules.mapNotNull { r ->
+                val owner = oldByPrefix[r.prefix]?.name
+                if (owner != null && owner != n) "${r.prefix}（型号 ${owner.ifBlank { "未填" }}）" else null
+            }
+            if (conflicts.isNotEmpty()) {
+                _setupLibMessage.value = buildString {
+                    append("保存失败：以下前缀已属于其他型号，未修改规则库。\n")
+                    append(conflicts.joinToString("、"))
+                    append("\n请先改前缀或到规则库调整所属型号。")
+                }
+                return@launch
+            }
+            val existed = existingModel != null || oldRules.any { it.name == n }
+            app.database.withTransaction {
+                if (existingModel != null) {
+                    ruleModelDao.updateDefaultQuantity(existingModel.id, plan, now)
+                } else {
+                    val id = ruleModelDao.insert(
+                        RuleModel(name = n, defaultQuantity = plan, updatedAt = now)
+                    )
+                    if (id > 0) ruleModelDao.updateDefaultQuantity(id, plan, now)
+                    else ruleModelDao.updateDefaultQuantityByName(n, plan, now)
+                }
+                // 同名型号视为一次完整覆盖：先清空该型号旧规则，再写入当前规则
+                ruleLibDao.deleteByModelName(n)
+                s.rules.forEach { r ->
+                    ruleLibDao.upsert(
+                        RuleLibEntry(
+                            prefix = r.prefix,
+                            name = n,
+                            allowDuplicate = r.allowDuplicate,
+                            countEnabled = r.countEnabled,
+                            checkHistory = r.checkHistory,
+                            ignoreRepeat = r.allowDuplicate && r.ignoreRepeat,
+                            updatedAt = now
+                        )
+                    )
+                }
+            }
+            val planText = if (plan > 0) "$plan 件" else "不限"
+            _setupLibMessage.value =
+                (if (existed) "已覆盖规则库型号「$n」" else "已保存到规则库：型号「$n」") +
+                    "，${s.rules.size} 条规则，默认装柜数量 $planText。\n" +
+                    "以后在设置页点「从规则库选择」选该型号即可载入。"
+        }
+    }
+
+    fun clearSetupLibMessage() {
+        _setupLibMessage.value = null
+    }
+
+    /**
+     * 扫码页「返回设置」：
+     *  - 未装齐：柜号 / 计划装柜数量 / 规则原样保留，已扫码数量同步为本会话已装数；
+     *  - 已装齐（正常数 ≥ 计划装柜数量，v15）：整页清空柜号 / 计划 / 规则 / 已扫数量，
+     *    只保留操作员工号，返回后可直接录入下一个柜子的信息。
      */
     fun backToOutboundSetup() {
         alarm.stop()
+        containerLookupJob?.cancel()
         _outboundStage.value = OutboundStage.SETUP
         _setupScanTarget.value = SetupScanTarget.RULE
         val st = _outbound.value
         if (st.activeContainer == null) return
         val done = st.total > 0 && st.okCount >= st.total
+        if (done) {
+            // 本柜已结束：清空会话，避免完成事件/旧计数影响下一柜
+            recordsJob?.cancel()
+            _outbound.value = OutboundScanState()
+            _outboundRecords.value = emptyList()
+            undoStack.clear()
+            redoStack.clear()
+            syncUndoState()
+            _setup.value = OutboundSetupState(
+                operatorId = operatorPrefs.getString(KEY_LAST_OPERATOR, "") ?: ""
+            )
+            return
+        }
         _setup.update {
             it.copy(
-                rules = if (done) emptyList() else it.rules,
                 scannedQuantity = st.okCount,
                 // v1.7.0：从扫码页返回 → 显示上次设置的计划装柜数量（会话计划>0 时回显）
                 totalQuantity = if (st.total > 0) st.total.toString() else it.totalQuantity,
@@ -1359,8 +1496,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 var added = 0
                 val conflicts = mutableListOf<String>()
                 app.database.withTransaction {
-                    if (cleanName.isNotBlank()) {
-                        // 规则挂在型号下：型号行不存在则补建（导入/手动新增都走这里）
+                    if (cleanName.isNotBlank() && ruleModelDao.findByName(cleanName) == null) {
+                        // 规则挂在型号下：型号行不存在则补建（导入/手动新增都走这里；默认数量在型号上单独维护）
                         ruleModelDao.insert(RuleModel(name = cleanName))
                     }
                     val existing = ruleLibDao.getAll().map { it.prefix }.toMutableSet()
@@ -1412,41 +1549,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---------- 规则库型号（v1.7.5：先建型号，再逐条添加规则） ----------
 
-    /** 新增型号（名称唯一；允许暂无规则） */
-    fun addRuleModel(name: String) {
-        val n = name.trim()
+    /**
+     * 新增 / 编辑型号（v16）：型号名称 + 型号级默认装柜数量（一个型号只维护 1 个）。
+     * 改名会同步更新该型号下全部规则的名称；默认数量对该型号下所有规则生效。
+     */
+    fun saveRuleModel(id: Long?, oldName: String, newName: String, defaultQuantity: Int) {
+        val n = newName.trim()
         if (n.isEmpty()) {
             _ruleLibMessage.value = "请输入型号名称"
             return
         }
+        val qty = defaultQuantity.coerceIn(0, 999_999)
         viewModelScope.launch {
-            val exists = ruleModelDao.findByName(n) != null || ruleLibDao.getAll().any { it.name == n }
+            val modelAtName = ruleModelDao.findByName(n)
+            val exists = (modelAtName != null && modelAtName.id != id) ||
+                ruleLibDao.getAll().any { it.name == n && it.name != oldName }
             if (exists) {
                 _ruleLibMessage.value = "型号已存在：$n"
                 return@launch
             }
-            ruleModelDao.insert(RuleModel(name = n))
-        }
-    }
-
-    /** 型号改名：同步更新该型号下全部规则的名称 */
-    fun renameRuleModel(id: Long, oldName: String, newName: String) {
-        val n = newName.trim()
-        if (n.isEmpty()) {
-            _ruleLibMessage.value = "型号名称不能为空"
-            return
-        }
-        if (n == oldName) return
-        viewModelScope.launch {
-            val exists = ruleModelDao.findByName(n) != null || ruleLibDao.getAll().any { it.name == n }
-            if (exists) {
-                _ruleLibMessage.value = "型号已存在：$n"
-                return@launch
-            }
-            app.database.withTransaction {
+            if (id == null) {
                 val now = Date()
-                ruleModelDao.rename(id, n, now)
-                if (oldName.isNotBlank()) ruleLibDao.renameModelRules(oldName, n, now)
+                val inserted = ruleModelDao.insert(RuleModel(name = n, defaultQuantity = qty, updatedAt = now))
+                // 极端并发（新增型号后立刻保存规则）下型号可能已先被建出，补写型号默认数量
+                if (inserted <= 0) ruleModelDao.updateDefaultQuantityByName(n, qty, now)
+            } else {
+                app.database.withTransaction {
+                    val now = Date()
+                    if (n != oldName) {
+                        ruleModelDao.rename(id, n, now)
+                        if (oldName.isNotBlank()) ruleLibDao.renameModelRules(oldName, n, now)
+                    }
+                    ruleModelDao.updateDefaultQuantity(id, qty, now)
+                }
             }
         }
     }
@@ -1473,7 +1608,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val parsed = withContext(Dispatchers.IO) { RuleSourceImporter.parse(context, uri) }
                 if (parsed.isEmpty()) {
                     _ruleLibMessage.value = "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称，" +
-                        "第 3~6 列可选=可重复扫/计入统计/查历史串号/忽略（1/0）"
+                        "第 3~6 列可选=可重复扫/计入统计/查历史串号/忽略（1/0），第 7 列可选=默认装柜数量"
                     return@launch
                 }
                 val ruleRows = parsed.filter { it.prefix.isNotBlank() }
@@ -1514,8 +1649,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 var added = 0
                 var updated = 0
+                val now = Date()
                 app.database.withTransaction {
-                    preview.modelNames.forEach { ruleModelDao.insert(RuleModel(name = it)) }
+                    // 默认装柜数量按型号维护 1 个：同一型号多行时取第一个有效值；
+                    // 旧文件没有第 7 列 → 保留库内原默认数量。
+                    val oldModelsByName = oldModels.associateBy { it.name }
+                    preview.modelNames.forEach { name ->
+                        val rows = preview.rules.filter { it.name == name }
+                        val qtyRow = rows.firstOrNull { it.hasDefaultQuantity && it.defaultQuantity > 0 }
+                            ?: rows.firstOrNull { it.hasDefaultQuantity }
+                        val oldModel = oldModelsByName[name]
+                        if (oldModel == null) {
+                            ruleModelDao.insert(
+                                RuleModel(
+                                    name = name,
+                                    defaultQuantity = qtyRow?.defaultQuantity ?: 0,
+                                    updatedAt = now
+                                )
+                            )
+                        } else if (qtyRow != null) {
+                            ruleModelDao.updateDefaultQuantity(oldModel.id, qtyRow.defaultQuantity, now)
+                        }
+                    }
                     val existing = oldRules.associateBy { it.prefix }
                     preview.rules.forEach { p ->
                         val old = existing[p.prefix]
@@ -1530,7 +1685,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 countEnabled = if (keep) p.countEnabled else old.countEnabled,
                                 checkHistory = if (keep) p.checkHistory else old.checkHistory,
                                 ignoreRepeat = if (keep) p.ignoreRepeat else old.ignoreRepeat,
-                                updatedAt = Date()
+                                updatedAt = now
                             )
                         )
                     }
@@ -1570,7 +1725,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val file = withContext(Dispatchers.IO) { RuleExporter.export(models, rules) }
                     "已导出 ${models.size} 个型号 / ${rules.size} 条规则：\n" +
                         "${RuleExporter.displayDir()}/${file.name}\n\n" +
-                        "拷贝到其他 PDA 后，在「规则库」点「导入」选择该文件即可（含型号与四个开关）。"
+                        "拷贝到其他 PDA 后，在「规则库」点「导入」选择该文件即可（含型号、四个开关与默认装柜数量）。"
                 }
             }.getOrElse { "导出失败：${it.message ?: "无法写入存储，请检查存储权限"}" }
             _ruleExporting.value = false

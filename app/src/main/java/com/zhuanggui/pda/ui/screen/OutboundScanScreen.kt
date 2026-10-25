@@ -189,7 +189,7 @@ fun OutboundScanScreen(
                             "已追加一行到 ${FileExporter.summaryDisplayPath()}。\n"
                         else
                             "⚠ 汇总写入失败，请检查存储权限。\n") +
-                        "点「返回设置」后规则将清空，该柜号下批按全新柜处理。",
+                        "点「返回设置」后柜号、计划装柜数量和规则将清空，可直接录入下一个柜子的信息。",
                     fontSize = 13.sp
                 )
             },

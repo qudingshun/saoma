@@ -30,6 +30,7 @@ data class RuleLibSnapshot(
                     put("countEnabled", r.countEnabled)
                     put("checkHistory", r.checkHistory)
                     put("ignoreRepeat", r.ignoreRepeat)
+                    put("defaultQuantity", r.defaultQuantity)
                 })
             }
         })
@@ -57,7 +58,8 @@ data class RuleLibSnapshot(
                             allowDuplicate = r.optBoolean("allowDuplicate", false),
                             countEnabled = if (r.has("countEnabled")) r.optBoolean("countEnabled") else true,
                             checkHistory = r.optBoolean("checkHistory", false),
-                            ignoreRepeat = r.optBoolean("ignoreRepeat", false)
+                            ignoreRepeat = r.optBoolean("ignoreRepeat", false),
+                            defaultQuantity = r.optInt("defaultQuantity", 0).coerceAtLeast(0)
                         )
                     )
                 }
@@ -81,5 +83,10 @@ data class RuleLibRule(
     val allowDuplicate: Boolean,
     val countEnabled: Boolean,
     val checkHistory: Boolean,
-    val ignoreRepeat: Boolean
+    val ignoreRepeat: Boolean,
+    /**
+     * 型号级默认装柜数量的同步载体（v16）：DB 中只存在 rule_models，
+     * 这里随每条规则重复携带，兼容旧电脑端按规则存储的口径。
+     */
+    val defaultQuantity: Int = 0
 )

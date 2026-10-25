@@ -19,9 +19,9 @@ class RuleExcelTest {
     @Test
     fun exportThenImport_roundTrip() {
         val models = listOf(
-            RuleModel(id = 1, name = "T45LW"),
+            RuleModel(id = 1, name = "T45LW", defaultQuantity = 260),
             RuleModel(id = 2, name = "T70"),
-            RuleModel(id = 3, name = "空型号")
+            RuleModel(id = 3, name = "空型号", defaultQuantity = 99)
         )
         val rules = listOf(
             RuleLibEntry(prefix = "411", name = "T45LW"),
@@ -40,6 +40,8 @@ class RuleExcelTest {
                 assertFalse(allowDuplicate)
                 assertTrue(countEnabled)
                 assertFalse(checkHistory)
+                assertEquals(260, defaultQuantity)
+                assertTrue(hasDefaultQuantity)
             }
             with(byPrefix.getValue("311")) {
                 assertEquals("T70", name)
@@ -49,9 +51,11 @@ class RuleExcelTest {
                 assertTrue(allowDuplicate)
                 assertTrue(ignoreRepeat)
             }
-            // 空型号：文件里有一行只有型号名称、没有前缀
-            val modelOnly = parsed.filter { it.prefix.isBlank() }.map { it.name }
-            assertEquals(listOf("空型号"), modelOnly)
+            // 空型号：文件里有一行只有型号名称、没有前缀（型号级默认数量也要带出）
+            val modelOnly = parsed.filter { it.prefix.isBlank() }
+            assertEquals(listOf("空型号"), modelOnly.map { it.name })
+            assertEquals(99, modelOnly[0].defaultQuantity)
+            assertTrue(modelOnly[0].hasDefaultQuantity)
         } finally {
             file.delete()
         }

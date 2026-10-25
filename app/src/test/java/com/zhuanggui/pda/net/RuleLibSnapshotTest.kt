@@ -16,7 +16,7 @@ class RuleLibSnapshotTest {
             {"ok":true,"hasData":true,"rev":3,
              "models":["T70","T45LW","T45LW"],
              "rules":[
-               {"prefix":"311","name":"T70","countEnabled":true,"checkHistory":true},
+               {"prefix":"311","name":"T70","countEnabled":true,"checkHistory":true,"defaultQuantity":260},
                {"prefix":"411","name":"T45LW","allowDuplicate":true,"countEnabled":false}
              ],
              "updatedAt":"2026-10-20T17:00:00.000+08:00","updatedBy":"PDA-DFE666"}
@@ -31,6 +31,7 @@ class RuleLibSnapshotTest {
         assertTrue(r311.countEnabled)
         assertTrue(r311.checkHistory)
         assertFalse(r311.allowDuplicate)
+        assertEquals(260, r311.defaultQuantity)
         val r411 = snap.rules.first { it.prefix == "411" }
         assertTrue(r411.allowDuplicate)
         assertFalse(r411.countEnabled)
@@ -54,7 +55,7 @@ class RuleLibSnapshotTest {
             models = listOf("M1"),
             rules = listOf(
                 RuleLibRule("411", "M1", allowDuplicate = true, countEnabled = false,
-                    checkHistory = true, ignoreRepeat = true)
+                    checkHistory = true, ignoreRepeat = true, defaultQuantity = 260)
             ),
             updatedAt = "", updatedBy = ""
         )
@@ -67,5 +68,6 @@ class RuleLibSnapshotTest {
         assertFalse(r.getBoolean("countEnabled"))
         assertTrue(r.getBoolean("checkHistory"))
         assertTrue(r.getBoolean("ignoreRepeat"))
+        assertEquals(260, r.getInt("defaultQuantity"))
     }
 }

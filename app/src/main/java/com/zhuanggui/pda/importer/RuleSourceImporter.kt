@@ -11,8 +11,8 @@ import java.io.InputStream
  * 规则源导入（v1.7.5：支持 XLSX「型号名称 / 前缀 / 四个开关」两列顺序自动识别）。
  *
  * 约定：
- *  - 首选列顺序（导出格式）：型号名称、前缀、可重复扫、计入统计、查历史串号、忽略
- *  - 兼容旧格式：前缀、名称（可选）、四个开关（可选）
+ *  - 首选列顺序（导出格式）：型号名称、前缀、可重复扫、计入统计、查历史串号、忽略、默认装柜数量
+ *  - 兼容旧格式：前缀、名称（可选）、四个开关（可选；无默认数量列）
  *  - 只有型号名称、没有前缀的行 = 建一个空型号（后续在 App 里逐个添加规则）
  *  - 首行表头（型号名称/前缀/条码/barcode…）自动跳过；前缀去空格转大写
  *  - 开关支持 1/0、是/否、true/false、√/×
@@ -25,6 +25,7 @@ object RuleSourceImporter {
      * 一条导入规则：前缀 + 名称 + 四个开关（v1.7.4）。
      * [prefix] 为空 = 仅建型号（文件里有型号名称但没有前缀）。
      * [hasFlags] = 源文件是否带了第 3~6 列开关；没带时覆盖导入应保留库内原开关。
+     * [defaultQuantity] / [hasDefaultQuantity] = 第 7 列默认装柜数量；旧文件没有该列时保留库内原值。
      */
     data class ParsedRule(
         val prefix: String,
@@ -33,7 +34,9 @@ object RuleSourceImporter {
         val countEnabled: Boolean = true,
         val checkHistory: Boolean = false,
         val ignoreRepeat: Boolean = false,
-        val hasFlags: Boolean = false
+        val hasFlags: Boolean = false,
+        val defaultQuantity: Int = 0,
+        val hasDefaultQuantity: Boolean = false
     )
 
     /** 常见表头词（仅 ASCII；中文表头用 isHeaderText 判断） */
@@ -92,14 +95,26 @@ object RuleSourceImporter {
                 val name = nameRaw?.trim().orEmpty()
                 val prefix = cleanPrefix(prefixRaw)
                 if (prefix == null) {
-                    // 允许「只有型号、没有前缀」的行（建空型号）
+                    // 允许「只有型号、没有前缀」的行（建空型号）；第 7 列仍可作为型号默认数量
                     if (name.isNotBlank()) {
-                        models.putIfAbsent(name, ParsedRule(prefix = "", name = name))
+                        val qty = cell(row, 6, fmt)
+                        models.putIfAbsent(
+                            name,
+                            ParsedRule(
+                                prefix = "",
+                                name = name,
+                                defaultQuantity = parseQuantity(qty) ?: 0,
+                                hasDefaultQuantity = !qty.isNullOrBlank()
+                            )
+                        )
                     }
                     continue
                 }
                 val flags = arrayOf(cell(row, 2, fmt), cell(row, 3, fmt), cell(row, 4, fmt), cell(row, 5, fmt))
-                out.putIfAbsent(prefix, ruleOf(prefix, name, flags[0], flags[1], flags[2], flags[3]))
+                out.putIfAbsent(
+                    prefix,
+                    ruleOf(prefix, name, flags[0], flags[1], flags[2], flags[3], cell(row, 6, fmt))
+                )
             }
         }
         return out.values.toList() + models.values.toList()
@@ -126,7 +141,11 @@ object RuleSourceImporter {
             val name = parts.getOrNull(1)?.trim().orEmpty()
             out.putIfAbsent(
                 prefix,
-                ruleOf(prefix, name, parts.getOrNull(2), parts.getOrNull(3), parts.getOrNull(4), parts.getOrNull(5))
+                ruleOf(
+                    prefix, name,
+                    parts.getOrNull(2), parts.getOrNull(3), parts.getOrNull(4), parts.getOrNull(5),
+                    parts.getOrNull(6)
+                )
             )
         }
         return out.values.toList()
@@ -143,16 +162,21 @@ object RuleSourceImporter {
             t.contains("条码") || t.contains("可重复")
     }
 
-    /** 前缀 + 名称 + 可选四列开关（第 3~6 列），缺省 = 旧行为（不可重复 / 计入 / 不查 / 不忽略） */
+    /**
+     * 前缀 + 名称 + 可选四列开关（第 3~6 列）+ 可选默认装柜数量（第 7 列）。
+     * 缺省 = 旧行为（不可重复 / 计入 / 不查 / 不忽略 / 不改默认数量）。
+     */
     private fun ruleOf(
         prefix: String,
         name: String,
         f1: String?,
         f2: String?,
         f3: String?,
-        f4: String?
+        f4: String?,
+        qty: String? = null
     ): ParsedRule {
         val hasFlags = listOf(f1, f2, f3, f4).any { !it.isNullOrBlank() }
+        val hasQty = !qty.isNullOrBlank()
         return ParsedRule(
             prefix = prefix,
             name = name,
@@ -160,8 +184,17 @@ object RuleSourceImporter {
             countEnabled = parseFlag(f2) ?: true,
             checkHistory = parseFlag(f3) ?: false,
             ignoreRepeat = parseFlag(f4) ?: false,
-            hasFlags = hasFlags
+            hasFlags = hasFlags,
+            defaultQuantity = parseQuantity(qty) ?: 0,
+            hasDefaultQuantity = hasQty
         )
+    }
+
+    /** 默认装柜数量：只取数字，0~999999；空/非数字 = null（不改库内原值） */
+    private fun parseQuantity(raw: String?): Int? {
+        val s = raw?.trim()?.filter { it.isDigit() }.orEmpty()
+        if (s.isEmpty()) return null
+        return s.toIntOrNull()?.coerceIn(0, 999_999)
     }
 
     /** 1/0、是/否、true/false、√/× 等；空/无法识别 = null（按默认值） */

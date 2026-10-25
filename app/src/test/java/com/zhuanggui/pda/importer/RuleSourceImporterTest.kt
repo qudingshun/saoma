@@ -72,6 +72,19 @@ class RuleSourceImporterTest {
         assertFalse(r.ignoreRepeat)
     }
 
+    /** v15：第 7 列默认装柜数量可导入；旧六列文件保持未设置状态 */
+    @Test
+    fun seventhColumn_defaultQuantity() {
+        val text = "\uFEFF前缀\t名称/型号\t可重复扫\t计入统计\t查历史串号\t忽略\t默认装柜数量\n" +
+            "311\tT70\t0\t1\t0\t0\t260\n" +
+            "312\tT70\t0\t1\t0\t0\t\n"
+        val list = RuleSourceImporter.parseTextContent(text)
+        assertEquals(260, list[0].defaultQuantity)
+        assertTrue(list[0].hasDefaultQuantity)
+        assertEquals(0, list[1].defaultQuantity)
+        assertFalse(list[1].hasDefaultQuantity)
+    }
+
     /** v1.9.2：真实机型前缀含 - 与 #（如 HYW-T55、#9970），必须能录入 */
     @Test
     fun cleanPrefixAllowsDashAndHash() {

@@ -26,6 +26,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,8 +70,7 @@ fun RulesScreen(
     onMessageShown: () -> Unit,
     onConfirmImport: () -> Unit,
     onCancelImport: () -> Unit,
-    onAddModel: (String) -> Unit,
-    onRenameModel: (Long, String, String) -> Unit,
+    onSaveModel: (id: Long?, oldName: String, newName: String, defaultQuantity: Int) -> Unit,
     onDeleteModel: (Long, String) -> Unit,
     onSaveRule: (
         id: Long?, prefix: String, name: String,
@@ -78,6 +79,9 @@ fun RulesScreen(
     onDeleteRule: (Long) -> Unit,
     onImport: (Uri) -> Unit,
     onExport: () -> Unit,
+    scannedPrefix: String?,
+    onRuleScanActive: (Boolean) -> Unit,
+    onConsumeRuleScan: () -> Unit,
     onBack: () -> Unit
 ) {
     var modelDialog by remember { mutableStateOf<ModelTarget?>(null) }
@@ -137,23 +141,39 @@ fun RulesScreen(
 
     modelDialog?.let { target ->
         RuleModelDialog(
-            title = if (target.id == null) "新增型号" else "型号改名",
-            initial = target.name,
+            title = if (target.id == null) "新增型号" else "编辑型号",
+            initialName = target.name,
+            initialDefaultQuantity = target.defaultQuantity,
             onDismiss = { modelDialog = null },
-            onSave = { name ->
-                if (target.id == null) onAddModel(name) else onRenameModel(target.id, target.name, name)
+            onSave = { name, defaultQty ->
+                val n = name.trim()
+                onSaveModel(target.id, target.name, n, defaultQty)
                 modelDialog = null
+                // 新增型号后直接打开「添加规则」，可立即扫码录前缀；同一型号可继续添加多条
+                val exists = models.any { it.name == n } || rules.any { it.name == n }
+                if (target.id == null && n.isNotBlank() && !exists) {
+                    expanded = expanded + n
+                    ruleDialog = RuleTarget(n, null)
+                }
             }
         )
     }
 
     ruleDialog?.let { target ->
+        val modelDefault = models.firstOrNull { it.name == target.modelName }?.defaultQuantity ?: 0
         RuleEditDialog(
             modelName = target.modelName,
+            modelDefaultQuantity = modelDefault,
             initial = target.entry,
+            scannedPrefix = scannedPrefix,
+            onRuleScanActive = onRuleScanActive,
+            onConsumeRuleScan = onConsumeRuleScan,
             onDismiss = { ruleDialog = null },
             onSave = { prefix, allowDup, count, checkHist, ignore ->
-                onSaveRule(target.entry?.id, prefix, target.modelName, allowDup, count, checkHist, ignore)
+                onSaveRule(
+                    target.entry?.id, prefix, target.modelName,
+                    allowDup, count, checkHist, ignore
+                )
                 ruleDialog = null
             }
         )
@@ -248,8 +268,8 @@ fun RulesScreen(
             }
 
             Text(
-                "先建型号，再点型号行「添加规则」逐个添加前缀；导入/导出为 XLSX（型号 / 前缀 / 四个开关）。\n" +
-                    "导出文件名带日期时间；导入时先显示新增/覆盖条数，确认后自动备份当前规则库再写入。",
+                "先新增型号，再维护多条规则；默认装柜数量按型号只维护 1 个。\n" +
+                    "规则前缀可用扫码枪直接录入；导入/导出 XLSX（型号 / 前缀 / 四个开关 / 默认数量）。",
                 fontSize = 11.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 2.dp)
             )
@@ -267,7 +287,7 @@ fun RulesScreen(
                     modifier = Modifier.weight(1f)
                 )
                 Button(
-                    onClick = { modelDialog = ModelTarget(null, "") },
+                    onClick = { modelDialog = ModelTarget(null, "", 0) },
                     contentPadding = PaddingValues(horizontal = 10.dp),
                     modifier = Modifier.height(44.dp)
                 ) { Text("新增型号", fontSize = 14.sp) }
@@ -316,6 +336,13 @@ fun RulesScreen(
                                     modifier = Modifier.weight(1f),
                                     maxLines = 1, overflow = TextOverflow.Ellipsis
                                 )
+                                if ((model?.defaultQuantity ?: 0) > 0) {
+                                    Text(
+                                        "默认 ${model?.defaultQuantity} 件",
+                                        fontSize = 11.sp, color = Color(0xFF1976D2),
+                                        modifier = Modifier.padding(end = 6.dp)
+                                    )
+                                }
                                 Text("${entries.size} 条", fontSize = 11.sp, color = Color.Gray)
                             }
                             if (open) {
@@ -324,13 +351,15 @@ fun RulesScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
-                                    TextButton(onClick = { ruleDialog = RuleTarget(name, null) }) {
+                                    TextButton(onClick = {
+                                        ruleDialog = RuleTarget(name, null)
+                                    }) {
                                         Text("＋ 添加规则", fontSize = 12.sp)
                                     }
                                     if (model != null) {
                                         TextButton(onClick = {
-                                            modelDialog = ModelTarget(model.id, model.name)
-                                        }) { Text("改名", fontSize = 12.sp) }
+                                            modelDialog = ModelTarget(model.id, model.name, model.defaultQuantity)
+                                        }) { Text("编辑型号", fontSize = 12.sp) }
                                     }
                                     TextButton(onClick = {
                                         deleteModel = model ?: RuleModel(id = 0, name = name)
@@ -356,7 +385,9 @@ fun RulesScreen(
                                                 Text(it, fontSize = 10.sp, color = Color(0xFF616161))
                                             }
                                         }
-                                        TextButton(onClick = { ruleDialog = RuleTarget(name, entry) }) {
+                                        TextButton(onClick = {
+                                            ruleDialog = RuleTarget(name, entry)
+                                        }) {
                                             Text("编辑", fontSize = 12.sp)
                                         }
                                         TextButton(onClick = { deleteRule = entry }) {
@@ -375,8 +406,15 @@ fun RulesScreen(
     }
 }
 
-private data class ModelTarget(val id: Long?, val name: String)
-private data class RuleTarget(val modelName: String, val entry: RuleLibEntry?)
+private data class ModelTarget(
+    val id: Long?,
+    val name: String,
+    val defaultQuantity: Int = 0
+)
+private data class RuleTarget(
+    val modelName: String,
+    val entry: RuleLibEntry?
+)
 
 /** 规则开关摘要（列表行第二行；全默认（无特殊设置）时返回 null 不显示）；设置页「从规则库选择」也复用 */
 internal fun flagSummary(e: RuleLibEntry): String? {
@@ -388,15 +426,19 @@ internal fun flagSummary(e: RuleLibEntry): String? {
     return if (parts.isEmpty()) null else parts.joinToString(" · ")
 }
 
-/** 型号新增/改名弹窗（只维护名称，规则随后逐个添加） */
+/** 型号新增/编辑弹窗：型号名称 + 默认装柜数量（一个型号只维护 1 个） */
 @Composable
 private fun RuleModelDialog(
     title: String,
-    initial: String,
+    initialName: String,
+    initialDefaultQuantity: Int,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String, Int) -> Unit
 ) {
-    var name by remember { mutableStateOf(initial) }
+    var name by remember { mutableStateOf(initialName) }
+    var qty by remember {
+        mutableStateOf(if (initialDefaultQuantity > 0) initialDefaultQuantity.toString() else "")
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -409,25 +451,41 @@ private fun RuleModelDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = qty,
+                    onValueChange = { v -> qty = v.filter { it.isDigit() }.take(6) },
+                    label = { Text("默认装柜数量（0/空 = 不限）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                )
                 Text(
-                    "先建型号，再在型号行点「添加规则」逐个添加条码前缀。",
+                    "默认数量按型号只维护 1 个，适用于该型号下所有规则；" +
+                        "设置页从规则库选择该型号时会自动带出计划。\n" +
+                        "保存后会自动打开「添加规则」，可继续添加多条前缀。",
                     fontSize = 11.sp, color = Color.Gray,
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(name) }, enabled = name.isNotBlank()) { Text("保存") }
+            TextButton(
+                onClick = { onSave(name, qty.toIntOrNull() ?: 0) },
+                enabled = name.isNotBlank()
+            ) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
 
-/** 规则新增/编辑弹窗（型号固定；一次一条前缀，逐个添加） */
+/** 规则新增/编辑弹窗（型号固定；一次一条前缀，逐个添加；前缀支持扫码枪录入） */
 @Composable
 private fun RuleEditDialog(
     modelName: String,
+    modelDefaultQuantity: Int,
     initial: RuleLibEntry?,
+    scannedPrefix: String?,
+    onRuleScanActive: (Boolean) -> Unit,
+    onConsumeRuleScan: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (
         prefix: String,
@@ -440,18 +498,48 @@ private fun RuleEditDialog(
     var checkHist by remember { mutableStateOf(initial?.checkHistory ?: false) }
     var ignore by remember { mutableStateOf(initial?.ignoreRepeat ?: false) }
 
+    // 弹窗打开期间，扫码优先填入本弹窗的前缀栏（关闭时解除）
+    DisposableEffect(Unit) {
+        onRuleScanActive(true)
+        onDispose { onRuleScanActive(false) }
+    }
+    LaunchedEffect(scannedPrefix) {
+        val raw = scannedPrefix?.trim().orEmpty()
+        if (raw.isNotEmpty()) {
+            prefix = raw.filter { it.isLetterOrDigit() || it == '-' || it == '#' }.uppercase()
+            onConsumeRuleScan()
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "添加规则" else "编辑规则") },
         text = {
             Column {
-                Text("型号：${modelName.ifBlank { "（未填型号）" }}", fontSize = 13.sp, color = Color(0xFF1976D2))
+                Text(
+                    "型号：${modelName.ifBlank { "（未填型号）" }}" +
+                        if (modelDefaultQuantity > 0) "  ·  默认 $modelDefaultQuantity 件" else "",
+                    fontSize = 13.sp, color = Color(0xFF1976D2)
+                )
                 OutlinedTextField(
                     value = prefix,
-                    onValueChange = { v -> prefix = v.filter { it.isLetterOrDigit() }.uppercase() },
-                    label = { Text("条码前缀（字母+数字，一次一条）") },
+                    onValueChange = { v ->
+                        prefix = v.filter { it.isLetterOrDigit() || it == '-' || it == '#' }.uppercase()
+                    },
+                    label = { Text("条码前缀 / 扫码录入") },
+                    placeholder = { Text("可扫条码后删减为固定前缀") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                )
+                Text(
+                    "扫码枪扫条码会自动填入；如条码含流水号，请删减为固定前缀部分。",
+                    fontSize = 11.sp, color = Color.Gray,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                Text(
+                    "同一型号可继续点「＋ 添加规则」维护多条前缀；默认装柜数量在型号上统一设置。",
+                    fontSize = 11.sp, color = Color.Gray,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -481,7 +569,11 @@ private fun RuleEditDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(prefix, allowDup, count, checkHist, allowDup && ignore) },
+                onClick = {
+                    onSave(
+                        prefix, allowDup, count, checkHist, allowDup && ignore
+                    )
+                },
                 enabled = prefix.isNotBlank()
             ) { Text("保存") }
         },

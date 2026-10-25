@@ -86,9 +86,12 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         composable(Routes.OUTBOUND_SETUP) {
             val setup by vm.setup.collectAsStateWithLifecycle()
             val ruleLibrary by vm.ruleLibrary.collectAsStateWithLifecycle()
+            val ruleModels by vm.ruleModels.collectAsStateWithLifecycle()
+            val setupLibMessage by vm.setupLibMessage.collectAsStateWithLifecycle()
             OutboundSetupScreen(
                 state = setup,
                 library = ruleLibrary,
+                ruleModels = ruleModels,
                 onContainerNo = vm::onContainerNoChange,
                 onTotal = vm::onTotalQuantityChange,
                 onOperatorId = vm::onOperatorIdChange,
@@ -107,6 +110,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onRuleSerial = vm::updateRuleSerial,
                 onAddRules = vm::addRulesFromSetup,
                 onOpenRuleLibrary = { navController.navigate(Routes.RULE_LIBRARY) },
+                saveMessage = setupLibMessage,
+                onSaveToRuleLibrary = vm::saveSetupToRuleLibrary,
+                onSaveMessageShown = vm::clearSetupLibMessage,
                 onStart = {
                     // 落库/恢复计数完成后再导航，避免“界面已开、状态未就绪”丢首枪
                     scope.launch {
@@ -214,6 +220,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             val ruleExporting by vm.ruleExporting.collectAsStateWithLifecycle()
             val ruleLibMessage by vm.ruleLibMessage.collectAsStateWithLifecycle()
             val ruleImportPreview by vm.ruleImportPreview.collectAsStateWithLifecycle()
+            val ruleScanData by vm.ruleScanData.collectAsStateWithLifecycle()
             RulesScreen(
                 models = ruleModels,
                 rules = ruleLibrary,
@@ -224,8 +231,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onMessageShown = vm::clearRuleLibMessage,
                 onConfirmImport = vm::confirmRuleImport,
                 onCancelImport = vm::cancelRuleImport,
-                onAddModel = vm::addRuleModel,
-                onRenameModel = vm::renameRuleModel,
+                onSaveModel = vm::saveRuleModel,
                 onDeleteModel = vm::deleteRuleModel,
                 onSaveRule = { id, prefix, name, allowDup, count, checkHist, ignore ->
                     vm.saveLibRule(id, prefix, name, allowDup, count, checkHist, ignore)
@@ -233,6 +239,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onDeleteRule = vm::deleteLibRule,
                 onImport = { uri -> vm.importRuleSource(context, uri) },
                 onExport = vm::exportRuleLibrary,
+                scannedPrefix = ruleScanData,
+                onRuleScanActive = vm::setRuleScanActive,
+                onConsumeRuleScan = vm::consumeRuleScanData,
                 onBack = { navController.popBackStack() }
             )
         }

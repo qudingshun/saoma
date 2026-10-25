@@ -28,7 +28,7 @@ import com.zhuanggui.pda.data.entity.SyncState
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class, RuleModel::class,
         SyncState::class, SyncInbox::class
     ],
-    version = 14,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -270,11 +270,78 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v14 → v15：
+         *  - rule_library 加「默认装柜数量」defaultQuantity（0 = 不自动填计划）
+         *  - 新增 scan_setup_templates（出库扫码设置方案：名称 + 计划数量 + 规则 JSON）
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `rule_library` ADD COLUMN `defaultQuantity` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `scan_setup_templates` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`totalQuantity` INTEGER NOT NULL, " +
+                        "`rulesJson` TEXT NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_scan_setup_templates_name` " +
+                        "ON `scan_setup_templates` (`name`)"
+                )
+            }
+        }
+
+        /**
+         * v15 → v16：默认装柜数量改为「型号级只维护 1 个」。
+         *  - rule_models 加 defaultQuantity，旧规则上的默认数量按型号取最大值回填
+         *  - rule_library 去掉 defaultQuantity（重建表，保持 prefix 唯一索引）
+         *  - 移除独立的设置方案表（保存方案改为写入规则库型号）
+         */
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `rule_models` ADD COLUMN `defaultQuantity` INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "UPDATE `rule_models` SET `defaultQuantity` = COALESCE((" +
+                        "SELECT MAX(`defaultQuantity`) FROM `rule_library` " +
+                        "WHERE `rule_library`.`name` = `rule_models`.`name`), 0)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `rule_library_new` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`prefix` TEXT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`allowDuplicate` INTEGER NOT NULL, " +
+                        "`countEnabled` INTEGER NOT NULL, " +
+                        "`checkHistory` INTEGER NOT NULL, " +
+                        "`ignoreRepeat` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `rule_library_new` (" +
+                        "`id`,`prefix`,`name`,`allowDuplicate`,`countEnabled`,`checkHistory`,`ignoreRepeat`,`updatedAt`) " +
+                        "SELECT `id`,`prefix`,`name`,`allowDuplicate`,`countEnabled`,`checkHistory`,`ignoreRepeat`,`updatedAt` " +
+                        "FROM `rule_library`"
+                )
+                db.execSQL("DROP TABLE `rule_library`")
+                db.execSQL("ALTER TABLE `rule_library_new` RENAME TO `rule_library`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_rule_library_prefix` " +
+                        "ON `rule_library` (`prefix`)"
+                )
+                db.execSQL("DROP TABLE IF EXISTS `scan_setup_templates`")
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16
         )
     }
 }

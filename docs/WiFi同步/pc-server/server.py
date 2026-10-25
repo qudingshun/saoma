@@ -650,7 +650,7 @@ def download_device_records(device_id: str, request: Request):
 
 
 # ---------- 规则库：PDA / 电脑网页 上传下载（v1.9.0） ----------
-RULELIB_HEADERS = ["型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略"]
+RULELIB_HEADERS = ["型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略", "默认装柜数量"]
 RULELIB_BACKUP_DIR = DATA / "规则库备份"
 
 
@@ -690,6 +690,7 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
             continue                    # 同前缀只保留第一条（与 PDA 规则库唯一键一致）
         seen.add(prefix)
         name = str(r.get("name") or "").strip()[:64]
+        has_default = "defaultQuantity" in r and str(r.get("defaultQuantity") or "").strip() != ""
         rules.append({
             "prefix": prefix,
             "name": name,
@@ -697,6 +698,8 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
             "countEnabled": bool(r.get("countEnabled", True)),
             "checkHistory": bool(r.get("checkHistory")),
             "ignoreRepeat": bool(r.get("ignoreRepeat")),
+            # -1 = 文件没有第 7 列；保存时按前缀保留旧默认数量（与 PDA 导入口径一致）
+            "defaultQuantity": _xlsx_int(r.get("defaultQuantity"), 0) if has_default else -1,
         })
     if not models and not rules:
         raise HTTPException(status_code=422, detail={
@@ -709,6 +712,14 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
     ts = now_iso()
     with closing(db()) as conn:
         old = _rulelib_row(conn)
+        # 旧格式 Excel 没有第 7 列时，按前缀保留电脑端已有默认数量
+        old_defaults = {
+            r.get("prefix"): _xlsx_int(r.get("defaultQuantity"), 0)
+            for r in (old["rules"] if old else [])
+        }
+        for r in rules:
+            if r.get("defaultQuantity", -1) < 0:
+                r["defaultQuantity"] = old_defaults.get(r["prefix"], 0)
         backup_name = ""
         if old:
             RULELIB_BACKUP_DIR.mkdir(exist_ok=True)
@@ -744,6 +755,16 @@ def _xlsx_flag(v, default: bool) -> bool:
     return default
 
 
+def _xlsx_int(v, default: int = 0) -> int:
+    s = str(v or "").strip()
+    if not s:
+        return default
+    try:
+        return max(0, min(999999, int(float(s))))
+    except Exception:
+        return default
+
+
 def _rulelib_to_xlsx(models: list[str], rules: list[dict]) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -756,7 +777,7 @@ def _rulelib_to_xlsx(models: list[str], rules: list[dict]) -> bytes:
     for name in names:
         items = sorted(by_name.get(name, []), key=lambda x: x.get("prefix") or "")
         if not items:
-            ws.append([name, "", "否", "是", "否", "否"])
+            ws.append([name, "", "否", "是", "否", "否", "0"])
         for r in items:
             ws.append([
                 name, r.get("prefix") or "",
@@ -764,10 +785,11 @@ def _rulelib_to_xlsx(models: list[str], rules: list[dict]) -> bytes:
                 "是" if r.get("countEnabled", True) else "否",
                 "是" if r.get("checkHistory") else "否",
                 "是" if r.get("ignoreRepeat") else "否",
+                str(_xlsx_int(r.get("defaultQuantity"), 0)),
             ])
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 18
-    for col in "CDEF":
+    for col in "CDEFG":
         ws.column_dimensions[col].width = 10
     ws.freeze_panes = "A2"
     buf = io.BytesIO()
@@ -790,7 +812,7 @@ def _parse_rulelib_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
     rules: dict[str, dict] = {}
     name_first: bool | None = None
     for row in ws.iter_rows(values_only=True):
-        vals = [("" if v is None else str(v)).strip() for v in (list(row) + [""] * 6)[:6]]
+        vals = [("" if v is None else str(v)).strip() for v in (list(row) + [""] * 7)[:7]]
         if not any(vals):
             continue
         c0, c1 = vals[0], vals[1]
@@ -808,14 +830,19 @@ def _parse_rulelib_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
             continue
         if name:
             models.add(name)
-        rules.setdefault(prefix, {
-            "prefix": prefix,
-            "name": name,
-            "allowDuplicate": _xlsx_flag(vals[2], False),
-            "countEnabled": _xlsx_flag(vals[3], True),
-            "checkHistory": _xlsx_flag(vals[4], False),
-            "ignoreRepeat": _xlsx_flag(vals[5], False),
-        })
+        if prefix not in rules:
+            rule = {
+                "prefix": prefix,
+                "name": name,
+                "allowDuplicate": _xlsx_flag(vals[2], False),
+                "countEnabled": _xlsx_flag(vals[3], True),
+                "checkHistory": _xlsx_flag(vals[4], False),
+                "ignoreRepeat": _xlsx_flag(vals[5], False),
+            }
+            # 旧六列 Excel 不带第 7 列：不写该字段，保存时按前缀保留旧默认数量
+            if vals[6].strip():
+                rule["defaultQuantity"] = _xlsx_int(vals[6], 0)
+            rules[prefix] = rule
     return sorted(models), list(rules.values())
 
 

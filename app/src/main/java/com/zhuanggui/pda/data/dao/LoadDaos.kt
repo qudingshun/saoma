@@ -233,6 +233,13 @@ interface RuleModelDao {
     @Query("UPDATE rule_models SET name = :newName, updatedAt = :updatedAt WHERE id = :id")
     suspend fun rename(id: Long, newName: String, updatedAt: java.util.Date)
 
+    /** 型号级默认装柜数量（v16：一个型号只维护 1 个，适用于其下全部规则） */
+    @Query("UPDATE rule_models SET defaultQuantity = :qty, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateDefaultQuantity(id: Long, qty: Int, updatedAt: java.util.Date)
+
+    @Query("UPDATE rule_models SET defaultQuantity = :qty, updatedAt = :updatedAt WHERE name = :name")
+    suspend fun updateDefaultQuantityByName(name: String, qty: Int, updatedAt: java.util.Date)
+
     @Query("DELETE FROM rule_models WHERE id = :id")
     suspend fun delete(id: Long)
 

@@ -124,7 +124,9 @@ class SyncRepository(
     /** 上传本机规则库 → 电脑端（整库替换，rev+1；其他 PDA 可下载） */
     suspend fun uploadRuleLibrary(): RuleLibSnapshot = withContext(Dispatchers.IO) {
         val cfg = config() ?: throw SyncClientException(0, "尚未配对")
-        val models = ruleModelDao.getAll().map { it.name }
+        val modelRows = ruleModelDao.getAll()
+        val modelDefaults = modelRows.associate { it.name to it.defaultQuantity }
+        val models = modelRows.map { it.name }
         val rules = ruleLibDao.getAll().map {
             RuleLibRule(
                 prefix = it.prefix,
@@ -132,7 +134,8 @@ class SyncRepository(
                 allowDuplicate = it.allowDuplicate,
                 countEnabled = it.countEnabled,
                 checkHistory = it.checkHistory,
-                ignoreRepeat = it.ignoreRepeat
+                ignoreRepeat = it.ignoreRepeat,
+                defaultQuantity = modelDefaults[it.name] ?: 0
             )
         }
         if (models.isEmpty() && rules.isEmpty()) {
@@ -176,11 +179,24 @@ class SyncRepository(
             .filter { it.isNotEmpty() }
             .distinct()
             .sorted()
+        // v16：电脑端快照仍按规则携带默认数量（兼容旧服务器）；下载后归并到型号级。
+        val modelDefaults = snap.rules
+            .filter { it.name.isNotBlank() && it.defaultQuantity > 0 }
+            .groupBy { it.name }
+            .mapValues { (_, rows) -> rows.first().defaultQuantity }
         val now = Date()
         db.withTransaction {
             ruleLibDao.deleteAll()
             ruleModelDao.deleteAll()
-            names.forEach { ruleModelDao.insert(RuleModel(name = it, updatedAt = now)) }
+            names.forEach {
+                ruleModelDao.insert(
+                    RuleModel(
+                        name = it,
+                        defaultQuantity = modelDefaults[it] ?: 0,
+                        updatedAt = now
+                    )
+                )
+            }
             snap.rules.forEach { r ->
                 ruleLibDao.upsert(
                     RuleLibEntry(
