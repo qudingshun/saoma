@@ -170,7 +170,7 @@ def next_task_rev(conn) -> int:
 # ---------------- 电脑端 TSV 落盘（按日期 / 柜号，和 PDA 本地文件同格式） ----------------
 RECORD_DIR = DATA / "装柜记录"
 TRASH_DIR = DATA / "回收站"
-TSV_HEADER = "\ufeff时间\t柜号\t条码\t操作员\n"
+TSV_HEADER = "\ufeff时间\t柜号\t条码\t操作员\t结果\n"
 
 
 def _record_time(raw: str) -> tuple[str, str]:
@@ -266,6 +266,16 @@ def _migrate_legacy_layout():
             shutil.move(str(p), str(target))
 
 
+def _result_label(raw: str) -> str:
+    """数据库判定 → 导出结果：正常 / 辅助 / 异常（具体原因仍保留在数据库）"""
+    s = (raw or "").strip().upper()
+    if s == "OK":
+        return "正常"
+    if s == "AUX":
+        return "辅助"
+    return "异常"
+
+
 def _write_tsv(path: Path, rows: list[sqlite3.Row]) -> None:
     """整文件重写（临时文件 + 替换，避免 Excel 打开时读到半截）"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -277,6 +287,7 @@ def _write_tsv(path: Path, rows: list[sqlite3.Row]) -> None:
             r["container_no"] or "",
             r["barcode"] or "",
             r["operator_id"] or "",
+            _result_label(r["result"]),
         ]) + "\n")
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("".join(parts), encoding="utf-8", newline="")

@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.zhuanggui.pda.data.entity.ScanRecord
+import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.log.OpLog
 import java.io.File
 import java.io.FileOutputStream
@@ -29,9 +30,10 @@ import java.util.Locale
  *   /sdcard/zhuanggui/装柜完成汇总.tsv               —— 每装齐一柜追加一行汇总
  *   /sdcard/zhuanggui/规则库/…                      —— 规则库导出 / 备份
  *
- * 记录明细（v1.10.4 起）只有四列：时间、柜号、条码、操作员。
- * 完整码和判定结果仍保存在数据库，用于界面显示、统计、报警与回收站；
- * 落盘文件不再写入这两列。旧版六列文件会在启动或下次追加时自动迁移。
+ * 记录明细（v1.11.1 起）：时间、柜号、条码、操作员、结果。
+ * 结果只写「正常 / 异常 / 辅助」三档：正常=OK，辅助=不计统计的辅助码，
+ * 其余（串号/重复/超量等）=异常；数据库仍保留具体判定原因。
+ * 旧版四列/六列文件会在启动时按数据库全量重建为新五列。
  *
  * 写入策略（三层保险，**任何情况下不丢记录**）：
  *  1) 主目录 /sdcard/zhuanggui（现场可见、可 U 盘拷贝）；
@@ -68,7 +70,7 @@ object FileExporter {
     private fun fmtDate(d: Date): String = dayFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
     private fun fmtTime(d: Date): String = timeFormat.format(Instant.ofEpochMilli(d.time).atZone(zone))
 
-    private const val HEADER = "时间\t柜号\t条码\t操作员\n"
+    private const val HEADER = "时间\t柜号\t条码\t操作员\t结果\n"
     private const val SUMMARY_HEADER = "完成时间\t柜号\t计划数量\t正常\t串号\t重复\t超量\t记录总数\t操作员\n"
 
     @Volatile
@@ -214,13 +216,37 @@ object FileExporter {
     private fun safeName(containerNo: String): String =
         containerNo.replace(Regex("[\\\\/:*?\"<>|]"), "_")
 
-    /** 一行记录（TSV：制表符分隔；v1.10.4 起只保留四列） */
+    /** 一行记录（TSV：制表符分隔；v1.11.1 起增加结果列） */
     private fun lineOf(record: ScanRecord): String = buildString {
         append(fmtTime(record.scannedAt))
         append('\t'); append(record.containerNo)
         append('\t'); append(record.barcode)
         append('\t'); append(record.operatorId)
+        append('\t'); append(resultLabel(record.result))
         append('\n')
+    }
+
+    /** 导出结果：正常 / 辅助 / 异常（具体串号/重复/超量仍保存在数据库） */
+    internal fun resultLabel(result: ScanResult): String = when (result) {
+        ScanResult.OK -> "正常"
+        ScanResult.AUX -> "辅助"
+        else -> "异常"
+    }
+
+    private fun oldResultLabel(raw: String): String {
+        val s = raw.trim()
+        return when {
+            s.isEmpty() -> ""
+            s == "正常" || s.equals("OK", ignoreCase = true) -> "正常"
+            s == "辅助" || s == "辅助码" || s.equals("AUX", ignoreCase = true) -> "辅助"
+            s == "异常" -> "异常"
+            s == "重复" || s == "串号" || s == "超量" ||
+                s.equals("DUPLICATE", ignoreCase = true) ||
+                s.equals("SERIAL_MISMATCH", ignoreCase = true) ||
+                s.equals("OVER_LIMIT", ignoreCase = true) ||
+                s.equals("NOT_IN_LIST", ignoreCase = true) -> "异常"
+            else -> "异常"
+        }
     }
 
     /**
@@ -295,11 +321,12 @@ object FileExporter {
     private enum class HeaderState { CANONICAL, MIGRATED, UNKNOWN }
 
     /**
-     * v1.10.4：旧版文件升级为四列。
+     * v1.11.1：旧版文件升级为五列（时间/柜号/条码/操作员/结果）。
      *
-     * 兼容 v1.6.0 的六列（时间/柜号/条码/完整码/结果/操作员）和更早的五列
-     * （无操作员）。按表头名称取「时间/柜号/条码/操作员」，丢弃完整码和结果；
-     * 数据行一条不丢。无法识别的 TSV 原样保留，避免误改别的文件。
+     * 兼容 v1.10.4 四列、v1.6.0 六列（时间/柜号/条码/完整码/结果/操作员）和更早的五列。
+     * 四列文件没有结果，先留空；启动后的 `rebuildFromRecords` 会按数据库补成正常/异常/辅助。
+     * 六列里的具体结果（重复/串号/超量/辅助码）会归一为正常/异常/辅助。
+     * 无法识别的 TSV 原样保留，避免误改别的文件。
      */
     private fun upgradeHeaderIfNeeded(file: File): HeaderState {
         val firstLine = runCatching {
@@ -322,16 +349,19 @@ object FileExporter {
             return HeaderState.UNKNOWN
         }
         val operatorIndex = header.indexOf("操作员")
+        val resultIndex = header.indexOf("结果")
 
         val sb = StringBuilder("\uFEFF$HEADER")
         lines.drop(1).forEach { rawLine ->
             if (rawLine.isBlank()) return@forEach
             val cells = rawLine.split('\t')
             fun cell(index: Int): String = if (index in cells.indices) cells[index] else ""
+            val result = if (resultIndex >= 0) oldResultLabel(cell(resultIndex)) else ""
             sb.append(cell(timeIndex)).append('\t')
                 .append(cell(containerIndex)).append('\t')
                 .append(cell(barcodeIndex)).append('\t')
-                .append(if (operatorIndex >= 0) cell(operatorIndex) else "")
+                .append(if (operatorIndex >= 0) cell(operatorIndex) else "").append('\t')
+                .append(result)
                 .append('\n')
         }
         writeAtomically(file, sb.toString())
@@ -339,7 +369,7 @@ object FileExporter {
     }
 
     /**
-     * 启动时迁移主目录 / 兜底目录下已有的旧版 TSV（六列 → 四列）。
+     * 启动时迁移主目录 / 兜底目录下已有的旧版 TSV（四列/六列 → 五列）。
      * 返回实际改写的文件数；无法识别的文件不动。
      */
     @Synchronized

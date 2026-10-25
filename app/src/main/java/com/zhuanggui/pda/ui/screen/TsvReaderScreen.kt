@@ -470,9 +470,9 @@ private fun listTsvFiles(root: File): List<TsvFileItem> {
 
 /**
  * 解析本 App 的记录 TSV。
- * v1.10.4 起为四列（时间/柜号/条码/操作员）；同时兼容旧版六列
- * （时间/柜号/条码/完整码/结果/操作员）和更早的五列。
- * 按表头名称取列，不能再用固定下标——四列时第 4 列是操作员，不是完整码。
+ * v1.11.1 起为五列（时间/柜号/条码/操作员/结果）；同时兼容 v1.10.4 四列
+ * 和旧版六列（时间/柜号/条码/完整码/结果/操作员）。
+ * 按表头名称取列，不能再用固定下标。
  */
 private fun parseTsv(file: File): List<TsvLine> {
     val lines = runCatching { file.readLines(Charsets.UTF_8) }.getOrDefault(emptyList())
@@ -544,8 +544,7 @@ private fun searchAll(root: File, query: String, limit: Int): List<TsvHit> {
 
 private fun resultColor(result: String): Color = when (result) {
     "正常" -> Color(0xFF388E3C)
-    "重复" -> Color(0xFFD32F2F)
-    "串号" -> Color(0xFFD32F2F)
+    "异常", "重复", "串号" -> Color(0xFFD32F2F)
     "超量" -> Color(0xFFF57F17)
     "辅助码", "辅助" -> Color(0xFF1976D2)
     else -> Color(0xFF616161)

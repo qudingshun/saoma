@@ -57,14 +57,14 @@ class ZhuangGuiApp : Application() {
             "版本=${BuildConfig.VERSION_NAME} 存储=${FileExporter.storageStatus()} " +
                     "记录目录=${FileExporter.displayPath()}"
         )
-        // v1.10.4：先把旧版六列 TSV 迁成四列（时间/柜号/条码/操作员），
-        // 再按数据库全量重建落盘文件（修「库里已扫、文件没落盘」的缺口）。
+        // v1.11.1：先把旧版 TSV 迁成五列（时间/柜号/条码/操作员/结果），
+        // 再按数据库全量重建落盘文件（结果列按数据库补齐，并修「库里已扫、文件没落盘」）。
         appScope.launch {
             runCatching {
                 val migrated = FileExporter.migrateRecordFiles()
                 if (migrated > 0) {
                     Log.i("ZhuangGuiApp", "migrated legacy record files: $migrated")
-                    OpLog.info("迁移记录文件", "旧版 TSV 六列 → 四列：$migrated 个文件")
+                    OpLog.info("迁移记录文件", "旧版 TSV → 五列：$migrated 个文件")
                 }
                 val records = database.scanRecordDao().getAllRecords()
                 if (records.isNotEmpty()) {
