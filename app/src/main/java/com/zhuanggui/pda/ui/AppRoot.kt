@@ -221,6 +221,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             val ruleLibMessage by vm.ruleLibMessage.collectAsStateWithLifecycle()
             val ruleImportPreview by vm.ruleImportPreview.collectAsStateWithLifecycle()
             val ruleScanData by vm.ruleScanData.collectAsStateWithLifecycle()
+            val ruleLibraryReveal by vm.ruleLibraryReveal.collectAsStateWithLifecycle()
             RulesScreen(
                 models = ruleModels,
                 rules = ruleLibrary,
@@ -228,6 +229,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 exporting = ruleExporting,
                 message = ruleLibMessage,
                 importPreview = ruleImportPreview,
+                revealModel = ruleLibraryReveal,
+                onRevealModelConsumed = vm::consumeRuleLibraryReveal,
                 onMessageShown = vm::clearRuleLibMessage,
                 onConfirmImport = vm::confirmRuleImport,
                 onCancelImport = vm::cancelRuleImport,

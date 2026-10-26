@@ -148,13 +148,24 @@ fun OutboundSetupScreen(
     }
 
     saveMessage?.let { msg ->
+        val savedOk = msg.startsWith("已保存") || msg.startsWith("已覆盖")
         AlertDialog(
             onDismissRequest = onSaveMessageShown,
             title = { Text("保存到规则库") },
             text = { Text(msg, fontSize = 13.sp) },
             confirmButton = {
-                TextButton(onClick = onSaveMessageShown) { Text("知道了") }
-            }
+                if (savedOk) {
+                    TextButton(onClick = {
+                        onSaveMessageShown()
+                        onOpenRuleLibrary()
+                    }) { Text("去规则库查看") }
+                } else {
+                    TextButton(onClick = onSaveMessageShown) { Text("知道了") }
+                }
+            },
+            dismissButton = if (savedOk) {
+                { TextButton(onClick = onSaveMessageShown) { Text("知道了") } }
+            } else null
         )
     }
 

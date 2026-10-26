@@ -219,6 +219,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _setupLibMessage = MutableStateFlow<String?>(null)
     val setupLibMessage: StateFlow<String?> = _setupLibMessage.asStateFlow()
 
+    /**
+     * v1.11.3：设置页保存成功后，规则库管理页需要自动定位的型号。
+     * 规则多时新保存型号可能被折叠或滚出视野，进入规则库时自动展开并滚动过去。
+     */
+    private val _ruleLibraryReveal = MutableStateFlow<String?>(null)
+    val ruleLibraryReveal: StateFlow<String?> = _ruleLibraryReveal.asStateFlow()
+
     /** 操作员工号：记住上次填写（首页进入设置页时预填，避免每柜重输） */
     private val operatorPrefs = application.getSharedPreferences("operator_prefs", Context.MODE_PRIVATE)
 
@@ -921,15 +928,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             val planText = if (plan > 0) "$plan 件" else "不限"
+            _ruleLibraryReveal.value = n
             _setupLibMessage.value =
                 (if (existed) "已覆盖规则库型号「$n」" else "已保存到规则库：型号「$n」") +
                     "，${s.rules.size} 条规则，默认装柜数量 $planText。\n" +
-                    "以后在设置页点「从规则库选择」选该型号即可载入。"
+                    "以后在设置页点「从规则库选择」选该型号即可载入。\n" +
+                    "到「规则库管理」会自动展开并定位到该型号。"
         }
     }
 
     fun clearSetupLibMessage() {
         _setupLibMessage.value = null
+    }
+
+    fun consumeRuleLibraryReveal() {
+        _ruleLibraryReveal.value = null
     }
 
     /**

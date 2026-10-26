@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -67,6 +68,8 @@ fun RulesScreen(
     exporting: Boolean,
     message: String?,
     importPreview: RuleImportPreview?,
+    revealModel: String?,
+    onRevealModelConsumed: () -> Unit,
     onMessageShown: () -> Unit,
     onConfirmImport: () -> Unit,
     onCancelImport: () -> Unit,
@@ -91,6 +94,7 @@ fun RulesScreen(
     var filter by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(setOf<String>()) }
     var localMessage by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -218,13 +222,30 @@ fun RulesScreen(
     }
 
     // 型号集合 = 型号表 + 规则里出现但型号表缺失的名称（容错）；空名称归到「（未填型号）」
-    val modelNames = (models.map { it.name } + rules.map { it.name }).distinct()
+    val allModelNames = (models.map { it.name } + rules.map { it.name }).distinct().sorted()
+    val modelNames = allModelNames
         .filter { name ->
             filter.isBlank() ||
                 name.contains(filter, ignoreCase = true) ||
                 rules.any { it.name == name && it.prefix.contains(filter, ignoreCase = true) }
         }
-        .sorted()
+
+    // v1.11.3：从设置页保存后进入本页，取消旧过滤，自动展开并滚动到刚保存的型号
+    LaunchedEffect(revealModel) {
+        if (revealModel != null && filter.isNotBlank()) filter = ""
+    }
+    LaunchedEffect(revealModel, modelNames, allModelNames) {
+        val target = revealModel ?: return@LaunchedEffect
+        val index = modelNames.indexOf(target)
+        if (index >= 0) {
+            expanded = expanded + target
+            listState.animateScrollToItem(index)
+            onRevealModelConsumed()
+        } else if (allModelNames.none { it == target }) {
+            // 型号已不存在（例如刚被删除）：消费掉，避免反复触发
+            onRevealModelConsumed()
+        }
+    }
 
     Scaffold { pad ->
         Column(
@@ -310,7 +331,10 @@ fun RulesScreen(
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
             } else {
-                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                ) {
                     items(modelNames, key = { "m_$it" }) { name ->
                         val model = models.firstOrNull { it.name == name }
                         val entries = rules.filter { it.name == name }.sortedBy { it.prefix }
