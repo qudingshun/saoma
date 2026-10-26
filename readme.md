@@ -16,6 +16,7 @@
 | [`docs/版本与里程碑.md`](docs/版本与里程碑.md) | 完整版本历史（v1.0→v1.11.1、电脑端 v1.1→v1.3、独立 TSV 阅读器 v1.0.0）、里程碑与审计条目完成对照 |
 | [`docs/TSV阅读器_独立版说明.md`](docs/TSV阅读器_独立版说明.md) | **独立安装的 TSV 阅读器**：文件管理器「打开方式」、搜索、详情、复制、编码支持与常见问题 |
 | [`docs/开发计划与优化建议.md`](docs/开发计划与优化建议.md) | 未完结清单、**下一步优化建议（P0/P1/P2）**、工程规范、风险与限制 |
+| [`docs/后续增强方案_看板_备份_自动化.md`](docs/后续增强方案_看板_备份_自动化.md) | 后续增强方案：端到端自动化、PDA 今日看板、电脑端自动备份（待排期） |
 | [`docs/现场验收清单.md`](docs/现场验收清单.md) | 新机装机 / 扫描设置 / WiFi 同步 / 主流程逐条打勾 |
 | [`docs/条码案例整理/`](docs/条码案例整理/) | 条码案例（35 个工作簿）整理结果：装柜台账 + 可直接导入 App 的 275 条型号规则库 |
 | [`docs/WiFi同步/`](docs/WiFi同步/) | 电脑端同步服务的协议、部署与排障（`pc-server/` 内含源码与打包脚本） |
@@ -235,7 +236,7 @@ sync_inbox       电脑下发的装柜任务（柜号唯一；P2 装载，v14）
      v13→v14 scan_records 加 uid（历史回填随机值 + 唯一索引）/syncedAt，新增 sync_state / sync_inbox；
      v14→v15 rule_library 加 defaultQuantity，新增 scan_setup_templates；
      v15→v16 默认数量归并到 rule_models，rule_library 去掉该列，移除 scan_setup_templates
-迁移测试：app/src/androidTest/.../MigrationTest.kt（8→9…15→16 单步 + 5→16 全链，真机运行 8 项）
+迁移测试：app/src/androidTest/.../MigrationTest.kt（8→9…15→16 单步 + 5→16 全链，2026-10-26 真机 8 项全部通过）
 ```
 
 `ScanResult`：`OK / NOT_IN_LIST（历史遗留）/ OVER_LIMIT / SERIAL_MISMATCH / DUPLICATE / AUX`
@@ -269,7 +270,7 @@ E:\saoma\                          ← 项目根（Git 仓库）
 - **JDK 17**：`C:\Users\qudin\.jdks\jdk-17.0.20.1+1`（仅经 `gradle.properties` 的 `org.gradle.java.home` 生效，不影响系统 JDK 8）
 - Gradle 8.9 + AGP；wrapper 走腾讯镜像；Maven 依赖走阿里云；SDK 组件手动安装，`android.builder.sdkDownload=false` 禁止联网下载
 - 构建：`.\gradlew.bat assembleDebug`；正式包 `.\gradlew.bat assembleRelease`（混淆 + 压缩 + 签名）
-- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖 + 规则库同步 JSON + 结果列映射，**48 项单测**）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 **8 项**，需连设备；已设 `leaveApksInstalledAfterRun` 防跑完卸载）
+- 测试：`.\gradlew.bat testDebugUnitTest`（扫码判定 + 流水号范围/末尾位数 + 语音读法 + 规则表解析 + 配对码解析 + 导出文件不覆盖 + 规则库同步 JSON + 结果列映射，**48 项单测**）；仪器测试 `.\gradlew.bat :app:connectedDebugAndroidTest`（数据库迁移 **8 项，2026-10-26 已真机通过**；跑前先备份 `/sdcard/zhuanggui`，测试会安装 debug 包，跑完需重装 release APK）
 - 独立 TSV 阅读器：`.\gradlew.bat :tsv-reader:testDebugUnitTest`（**10 项单测**：UTF-8/UTF-16/GBK、BOM、CRLF、引号字段、错列、空行、四列/六列格式、大小上限）；正式包 `.\gradlew.bat :tsv-reader:assembleRelease` → `tsv-reader\build\outputs\apk\release\tsv-reader-release.apk`
 - 产物：`app\build\outputs\apk\debug\app-debug.apk` / `app\build\outputs\apk\release\app-release.apk`（均用项目签名）
 - 签名：项目专用 keystore 在 `E:\saoma\saoma-keystore\zhuanggui-release.jks`（已 gitignore）；密码存本机 `keystore.properties`（已 gitignore）；**debug 与 release 同钥匙**，同一设备可无缝互装
@@ -316,7 +317,7 @@ E:\saoma\                          ← 项目根（Git 仓库）
 
 ## 十四、版本历史（最近）
 
-- **v1.11.1**（versionCode 37，DB v16）：**装柜明细增加结果列**——TSV 列改为 `时间 / 柜号 / 条码 / 操作员 / 结果`；结果写 `正常 / 辅助 / 异常`，具体串号/重复/超量原因仍存数据库；启动时按数据库把旧四列/六列文件重建为五列；电脑端同步导出的 TSV 同步增加结果列
+- **v1.11.1**（versionCode 37，DB v16）：**装柜明细增加结果列**——TSV 列改为 `时间 / 柜号 / 条码 / 操作员 / 结果`；结果写 `正常 / 辅助 / 异常`，具体串号/重复/超量原因仍存数据库；启动时按数据库把旧四列/六列文件重建为五列；电脑端同步导出的 TSV 同步增加结果列；单测 48 项、迁移测试 8 项（2026-10-26 真机通过）
 - **v1.11.0**（versionCode 36，DB v16）：**装柜连续作业优化**——① 装柜完成返回设置页后自动清空柜号/计划/规则/已扫数量（保留操作员），可直接录入下一柜；② 规则库新增型号后自动打开“添加规则”，前缀支持扫码枪录入，同一型号可维护多条规则，**默认装柜数量按型号只维护 1 个**，从规则库选择时自动带出计划；③ 设置页新增“保存到规则库”，按型号保存当前规则和计划数量，以后用“从规则库选择”载入；数据库 v14→v15→v16（默认数量从规则行归并到型号，移除独立设置方案表）；单测 47 项、迁移测试 8 项
 - **独立 TSV 阅读器 v1.0.0**（2026-10-22）：新增单独安装的 `com.zhuanggui.tsvreader`：文件管理器点 `.tsv` →「打开方式」直接看；支持 App 内选文件、搜索、详情、复制条码/整行；兼容 v1.11.1 五列、v1.10.4 四列与旧六列 TSV；UTF-8/UTF-16/GBK 自动识别；10 项单测
 - **v1.10.4**：扫码记录 TSV 明细精简为 **时间、柜号、条码、操作员** 四列（完整码/结果只存数据库）；旧六列文件启动时自动迁移，记录条数不变；主 App「TSV 原文」同步兼容四列/旧六列；无数据库结构变更（DB v14）
@@ -345,4 +346,6 @@ E:\saoma\                          ← 项目根（Git 仓库）
 | P1 | 同步策略省电（充电/时段同步、退避重试） | 减少 PDA 耗电 |
 | P2 | 扫描设置页自动比对广播名/键值、冷启动优化、条码校验位、语音库扩充、深色主题开关、规则库版本回滚 | 体验与长期能力 |
 
-> 详见 [`docs/开发计划与优化建议.md`](docs/开发计划与优化建议.md)（含工作量、验收方式与 v1.10.0 建议范围）。
+> 详见 [`docs/开发计划与优化建议.md`](docs/开发计划与优化建议.md)（含工作量、验收方式与 v1.12.0 建议范围）和 [`docs/后续增强方案_看板_备份_自动化.md`](docs/后续增强方案_看板_备份_自动化.md)。
+>
+> 2026-10-26 已拍板：归档清理全部人工、不做电脑端装柜汇总报表、规则库所有 PDA 统一一份、流水号范围/末尾位数不写入规则库。
