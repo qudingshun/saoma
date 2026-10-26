@@ -3,18 +3,15 @@ package com.zhuanggui.pda.importer
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.export.RuleExporter
-import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 
-/** XLSX 导出/导入往返单测（v1.7.5）：型号主显示、四开关、空型号、旧格式兼容。 */
-class RuleExcelTest {
+/** TSV 导出/导入往返单测（v1.12.1）：型号主显示、四开关、空型号、同前缀多型号、旧格式兼容。 */
+class RuleTextIoTest {
 
     @Test
     fun exportThenImport_roundTrip() {
@@ -28,10 +25,10 @@ class RuleExcelTest {
             RuleLibEntry(prefix = "311", name = "T70", checkHistory = true),
             RuleLibEntry(prefix = "ZZ1", name = "T70", allowDuplicate = true, ignoreRepeat = true)
         )
-        val file = File.createTempFile("rules", ".xlsx")
+        val file = File.createTempFile("rules", ".tsv")
         try {
             RuleExporter.exportTo(file, models, rules)
-            val parsed = file.inputStream().use { RuleSourceImporter.parseExcel(it) }
+            val parsed = RuleSourceImporter.parseTextContent(file.readText())
 
             val byPrefix = parsed.filter { it.prefix.isNotBlank() }.associateBy { it.prefix }
             assertEquals(3, byPrefix.size)
@@ -51,7 +48,6 @@ class RuleExcelTest {
                 assertTrue(allowDuplicate)
                 assertTrue(ignoreRepeat)
             }
-            // 空型号：文件里有一行只有型号名称、没有前缀（型号级默认数量也要带出）
             val modelOnly = parsed.filter { it.prefix.isBlank() }
             assertEquals(listOf("空型号"), modelOnly.map { it.name })
             assertEquals(99, modelOnly[0].defaultQuantity)
@@ -71,10 +67,10 @@ class RuleExcelTest {
             RuleLibEntry(prefix = "COMMON", name = "MODEL_A", allowDuplicate = true, ignoreRepeat = true),
             RuleLibEntry(prefix = "COMMON", name = "MODEL_B", allowDuplicate = true, ignoreRepeat = true)
         )
-        val file = File.createTempFile("rules-duplicate", ".xlsx")
+        val file = File.createTempFile("rules-duplicate", ".tsv")
         try {
             RuleExporter.exportTo(file, models, rules)
-            val parsed = file.inputStream().use { RuleSourceImporter.parseExcel(it) }
+            val parsed = RuleSourceImporter.parseTextContent(file.readText())
             val common = parsed.filter { it.prefix == "COMMON" }
             assertEquals(2, common.size)
             assertEquals(setOf("MODEL_A", "MODEL_B"), common.map { it.name }.toSet())
@@ -86,13 +82,10 @@ class RuleExcelTest {
 
     @Test
     fun legacyPrefixFirst_withHeader_isParsed() {
-        val bytes = workbook(
-            listOf(
-                listOf("前缀", "名称/型号", "可重复扫", "计入统计", "查历史串号", "忽略"),
-                listOf("844", "惠而浦冰箱", "0", "1", "0", "0")
-            )
+        val parsed = RuleSourceImporter.parseTextContent(
+            "前缀\t名称/型号\t可重复扫\t计入统计\t查历史串号\t忽略\n" +
+                "844\t惠而浦冰箱\t0\t1\t0\t0\n"
         )
-        val parsed = RuleSourceImporter.parseExcel(ByteArrayInputStream(bytes.toByteArray()))
         assertEquals(1, parsed.size)
         assertEquals("844", parsed[0].prefix)
         assertEquals("惠而浦冰箱", parsed[0].name)
@@ -101,14 +94,9 @@ class RuleExcelTest {
 
     @Test
     fun nameFirstWithoutHeader_defaultsToPrefixFirst() {
-        // 无表头的旧文件：第一列仍是前缀（保持兼容）
-        val bytes = workbook(
-            listOf(
-                listOf("844", "惠而浦冰箱", "", "", "", ""),
-                listOf("845", "惠而浦冰箱2", "", "", "", "")
-            )
+        val parsed = RuleSourceImporter.parseTextContent(
+            "844,惠而浦冰箱\n845,惠而浦冰箱2\n"
         )
-        val parsed = RuleSourceImporter.parseExcel(ByteArrayInputStream(bytes.toByteArray()))
         assertEquals(listOf("844", "845"), parsed.map { it.prefix })
     }
 
@@ -120,25 +108,12 @@ class RuleExcelTest {
             val a = RuleExporter.uniqueFile(dir, base)
             a.writeText("old")
             val b = RuleExporter.uniqueFile(dir, base)
-            assertEquals("$base.xlsx", a.name)
-            assertEquals("${base}_2.xlsx", b.name)
+            assertEquals("$base.tsv", a.name)
+            assertEquals("${base}_2.tsv", b.name)
             assertFalse(b.exists())
             assertEquals("old", a.readText())
         } finally {
             dir.deleteRecursively()
         }
-    }
-
-    private fun workbook(rows: List<List<String>>): ByteArrayOutputStream {
-        val out = ByteArrayOutputStream()
-        XSSFWorkbook().use { wb ->
-            val sheet = wb.createSheet("规则库")
-            rows.forEachIndexed { r, cols ->
-                val row = sheet.createRow(r)
-                cols.forEachIndexed { c, v -> row.createCell(c).setCellValue(v) }
-            }
-            wb.write(out)
-        }
-        return out
     }
 }

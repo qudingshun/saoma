@@ -1660,8 +1660,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val parsed = withContext(Dispatchers.IO) { RuleSourceImporter.parse(context, uri) }
                 if (parsed.isEmpty()) {
-                    _ruleLibMessage.value = "未解析到有效规则。\n格式要求：第一列=条码前缀（字母+数字），第二列可选=名称，" +
-                        "第 3~6 列可选=可重复扫/计入统计/查历史串号/忽略（1/0），第 7 列可选=默认装柜数量"
+                    _ruleLibMessage.value = "未解析到有效规则。\n" +
+                        "请导入 TSV/TXT（Tab 或逗号分隔）。App 导出格式：型号名称 / 前缀 / 可重复扫 / " +
+                        "计入统计 / 查历史串号 / 忽略 / 默认装柜数量；\n" +
+                        "也兼容旧格式：前缀 / 名称 / 四个开关。"
                     return@launch
                 }
                 val ruleRows = parsed.filter { it.prefix.isNotBlank() }
@@ -1680,8 +1682,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     newModels = modelNames.count { it !in existingNames },
                     overwriteSamples = overwrite.map { it.prefix }.take(12)
                 )
-            } catch (e: Exception) {
-                _ruleLibMessage.value = "导入失败（规则库未修改）：${e.message ?: "文件无法解析"}"
+            } catch (e: Throwable) {
+                // 导入解析任何异常都不能让 App 崩溃；规则库保持原样
+                _ruleLibMessage.value = "导入失败（规则库未修改）：${e.message ?: e.javaClass.simpleName}"
             } finally {
                 _ruleImporting.value = false
             }

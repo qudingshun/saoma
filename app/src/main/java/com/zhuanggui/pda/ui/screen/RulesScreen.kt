@@ -44,13 +44,13 @@ import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
 import com.zhuanggui.pda.ui.RuleImportPreview
 
-/** 规则源文件类型（解析端按扩展名判断，这里限定选择范围；含导出的 .xlsx） */
+/** 规则源文件类型（v1.12.1：TSV/TXT/CSV 文本；不再选择 XLSX） */
 private val RULE_FILE_MIMES = arrayOf(
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
-    "application/vnd.ms-excel",                                           // .xls
-    "text/csv",                                                           // .csv
-    "text/plain",                                                         // .txt
-    "text/tab-separated-values"                                           // .tsv（旧版导出，兼容）
+    "text/plain",                  // .txt
+    "text/tab-separated-values",   // .tsv
+    "text/csv",                    // .csv
+    "application/csv",
+    "application/octet-stream"     // 部分 ROM 对 .tsv 的 MIME 识别为 octet-stream
 )
 
 /**
@@ -58,7 +58,7 @@ private val RULE_FILE_MIMES = arrayOf(
  *  - 维护顺序：先「新增型号」，再在型号行里「添加规则」逐个加前缀
  *  - 列表默认只显示型号名称（含规则条数），点型号行展开/收起其规则
  *  - 型号可改名（同步规则名称）/ 删除（连同其下规则）；规则可逐条编辑/删除
- *  - 导入 / 导出 XLSX（型号名称 / 前缀 / 四个开关），便于拷到其他 PDA
+ *  - 导入 / 导出 TSV/TXT（型号名称 / 前缀 / 四个开关），便于拷到其他 PDA
  */
 @Composable
 fun RulesScreen(
@@ -291,7 +291,7 @@ fun RulesScreen(
             Text(
                 "先新增型号，再维护多条规则；默认装柜数量按型号只维护 1 个。\n" +
                     "普通计数码不能与其他型号重复；可重复扫 / 辅助码 / 查历史串号 / 忽略码可跨型号共用。\n" +
-                    "规则前缀可用扫码枪直接录入；导入/导出 XLSX（型号 / 前缀 / 四个开关 / 默认数量）。",
+                    "规则前缀可用扫码枪直接录入；导入/导出 TSV 文本（Excel/WPS 可直接打开；也支持 TXT/CSV）。",
                 fontSize = 11.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 2.dp)
             )

@@ -27,8 +27,8 @@ android {
         // 建目录写文件（targetSdk 30+ 时 MANAGE_EXTERNAL_STORAGE 也救不了组权限 → 表现为
         // 「有权限却写不进 /sdcard」）。29 还能保留 requestLegacyExternalStorage 的旧行为。
         targetSdk = 29
-        versionCode = 40
-        versionName = "1.12.0"
+        versionCode = 41
+        versionName = "1.12.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -105,11 +105,7 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
-    // 规则库「规则源导入」：解析 .xlsx/.xls（POI）。
-    // 注：工单 Excel 导入功能仍保持下架，仅规则库使用 POI。
-    implementation("org.apache.poi:poi:5.2.5")
-    implementation("org.apache.poi:poi-ooxml:5.2.5")
-    implementation("org.apache.commons:commons-compress:1.26.2")
+    // 规则库导入导出已恢复为 TSV/TXT 文本（v1.12.1），不再依赖 Apache POI。
 
     // WiFi 同步（v1.8.0）：仅这两个依赖（org.json 系统自带）
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

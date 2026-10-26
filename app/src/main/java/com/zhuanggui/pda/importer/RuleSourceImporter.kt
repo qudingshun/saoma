@@ -2,22 +2,22 @@ package com.zhuanggui.pda.importer
 
 import android.content.Context
 import android.net.Uri
-import org.apache.poi.ss.usermodel.DataFormatter
-import org.apache.poi.ss.usermodel.Row
-import org.apache.poi.ss.usermodel.WorkbookFactory
 import java.io.InputStream
+import java.nio.charset.Charset
 
 /**
- * 规则源导入（v1.7.5：支持 XLSX「型号名称 / 前缀 / 四个开关」两列顺序自动识别）。
+ * 规则库导入（v1.12.1：恢复 TSV / TXT 文本格式，不再使用 XLSX/POI）。
  *
  * 约定：
- *  - 首选列顺序（导出格式）：型号名称、前缀、可重复扫、计入统计、查历史串号、忽略、默认装柜数量
+ *  - 首选列顺序（App 导出格式）：型号名称、前缀、可重复扫、计入统计、查历史串号、忽略、默认装柜数量
  *  - 兼容旧格式：前缀、名称（可选）、四个开关（可选；无默认数量列）
  *  - 只有型号名称、没有前缀的行 = 建一个空型号（后续在 App 里逐个添加规则）
  *  - 首行表头（型号名称/前缀/条码/barcode…）自动跳过；前缀去空格转大写
  *  - 开关支持 1/0、是/否、true/false、√/×
+ *  - 支持 Tab / 逗号 / 分号分隔；UTF-8（带 BOM 也可），检测到乱码时按 GBK 再试一次
  *
- * 解析对规则表这类小文件足够安全；调用方需在 Dispatchers.IO 执行。
+ * 说明：XLSX 解析依赖 Apache POI，release 包经 R8 后现场机出现过
+ * `DataFormatter` 静态初始化崩溃；因此 v1.12.1 起导入只接受 TSV/TXT/CSV。
  */
 object RuleSourceImporter {
 
@@ -39,7 +39,7 @@ object RuleSourceImporter {
         val hasDefaultQuantity: Boolean = false
     )
 
-    /** 常见表头词（仅 ASCII；中文表头用 isHeaderText 判断） */
+    /** 常见表头词（仅 ASCII；中文表头用 contains 判断） */
     private val HEADER_WORDS = setOf(
         "barcode", "bardcode", "prefix", "rule", "code", "sn", "sku", "ean", "upc"
     )
@@ -57,113 +57,94 @@ object RuleSourceImporter {
     /** 解析 url 指向的规则源文件；无法识别/损坏时抛异常，由调用方提示 */
     fun parse(context: Context, uri: Uri): List<ParsedRule> {
         val fileName = displayName(context, uri).lowercase()
+        if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
+            throw IllegalStateException("XLSX 导入已停用：请在 Excel/WPS 中另存为 TSV 或 TXT 后再导入")
+        }
         val input = context.contentResolver.openInputStream(uri)
             ?: throw IllegalStateException("无法读取所选文件")
-        input.use { stream ->
-            return when {
-                fileName.endsWith(".xlsx") || fileName.endsWith(".xls") -> parseExcel(stream)
-                else -> parseText(stream) // .csv / .txt / .tsv / 其他按纯文本尝试
-            }
-        }
+        input.use { stream -> return parseText(stream) }
     }
 
-    internal fun parseExcel(input: InputStream): List<ParsedRule> {
-        val out = LinkedHashMap<String, ParsedRule>()       // key = prefix + name（v1.12.0 允许同前缀跨型号）
+    private fun parseText(input: InputStream): List<ParsedRule> {
+        val bytes = input.readBytes()
+        var text = bytes.toString(Charsets.UTF_8)
+        // 现场文件可能是 GBK 另存的 TXT；UTF-8 出现替换符时再按 GBK 解一次
+        if (text.contains('\uFFFD')) {
+            runCatching { bytes.toString(Charset.forName("GBK")) }
+                .getOrNull()
+                ?.takeIf { !it.contains('\uFFFD') }
+                ?.let { text = it }
+        }
+        return parseTextContent(text)
+    }
+
+    /** 纯文本解析（单测直接调用）：Tab / 逗号 / 分号均可，自动识别表头列顺序。 */
+    internal fun parseTextContent(text: String): List<ParsedRule> {
+        val out = LinkedHashMap<String, ParsedRule>()       // key = prefix + name（同前缀可跨型号）
         val models = LinkedHashMap<String, ParsedRule>()    // key = 型号名称（空规则）
-        val fmt = DataFormatter()
-        WorkbookFactory.create(input).use { wb ->
-            if (wb.numberOfSheets <= 0) return emptyList()
-            val sheet = wb.getSheetAt(0)
-            var nameFirst = false
-            var first = true
-            for (row in sheet) {
-                val c0 = cell(row, 0, fmt)
-                val c1 = cell(row, 1, fmt)
-                if (first) {
-                    first = false
-                    val h0 = c0?.trim().orEmpty()
-                    val h1 = c1?.trim().orEmpty()
-                    if (isHeaderText(h0) || isHeaderText(h1)) {
-                        // 表头：「型号名称, 前缀」= 新导出格式；否则按旧格式（前缀, 名称）
-                        nameFirst = (h0.contains("型号") || h0.contains("名称")) && h1.contains("前缀")
-                        continue
-                    }
-                    // 无表头：首行按旧格式（前缀在前）继续处理
+        var firstRow = true
+        var nameFirst = false
+
+        text.removePrefix("\uFEFF").lineSequence().forEach { line ->
+            val raw = line.trim()
+            if (raw.isEmpty()) return@forEach
+            val parts = splitLine(raw)
+            if (firstRow) {
+                firstRow = false
+                if (isHeaderRow(parts)) {
+                    val h0 = parts.getOrNull(0).orEmpty()
+                    val h1 = parts.getOrNull(1).orEmpty()
+                    nameFirst = (h0.contains("型号") || h0.contains("名称")) && h1.contains("前缀")
+                    return@forEach
                 }
-                val nameRaw = if (nameFirst) c0 else c1
-                val prefixRaw = if (nameFirst) c1 else c0
-                val name = nameRaw?.trim().orEmpty()
-                val prefix = cleanPrefix(prefixRaw)
-                if (prefix == null) {
-                    // 允许「只有型号、没有前缀」的行（建空型号）；第 7 列仍可作为型号默认数量
-                    if (name.isNotBlank()) {
-                        val qty = cell(row, 6, fmt)
-                        models.putIfAbsent(
-                            name,
-                            ParsedRule(
-                                prefix = "",
-                                name = name,
-                                defaultQuantity = parseQuantity(qty) ?: 0,
-                                hasDefaultQuantity = !qty.isNullOrBlank()
-                            )
-                        )
-                    }
-                    continue
-                }
-                val flags = arrayOf(cell(row, 2, fmt), cell(row, 3, fmt), cell(row, 4, fmt), cell(row, 5, fmt))
-                out.putIfAbsent(
-                    ruleKey(prefix, name),
-                    ruleOf(prefix, name, flags[0], flags[1], flags[2], flags[3], cell(row, 6, fmt))
-                )
             }
+            val name = (if (nameFirst) parts.getOrNull(0) else parts.getOrNull(1))
+                ?.trim().orEmpty()
+            val prefixRaw = if (nameFirst) parts.getOrNull(1) else parts.getOrNull(0)
+            val prefix = cleanPrefix(prefixRaw)
+            val qty = parts.getOrNull(6)
+            if (prefix == null) {
+                // 只有前缀栏为空、型号非空 = 建空型号；前缀栏有非法字符则跳过
+                if (prefixRaw.isNullOrBlank() && name.isNotBlank()) {
+                    models.putIfAbsent(
+                        name,
+                        ParsedRule(
+                            prefix = "",
+                            name = name,
+                            defaultQuantity = parseQuantity(qty) ?: 0,
+                            hasDefaultQuantity = !qty.isNullOrBlank()
+                        )
+                    )
+                }
+                return@forEach
+            }
+            val flags = (2..5).map { parts.getOrNull(it) }
+            out.putIfAbsent(
+                ruleKey(prefix, name),
+                ruleOf(prefix, name, flags[0], flags[1], flags[2], flags[3], qty)
+            )
         }
         return out.values.toList() + models.values.toList()
     }
 
-    private fun parseText(input: InputStream): List<ParsedRule> {
-        val text = input.readBytes().toString(Charsets.UTF_8)
-        return parseTextContent(text)
+    private fun splitLine(raw: String): List<String> = when {
+        '\t' in raw -> raw.split('\t')
+        ',' in raw -> raw.split(',')
+        ';' in raw -> raw.split(';')
+        else -> listOf(raw)
     }
 
-    /** 纯文本解析（旧 TSV/CSV/TXT；单测直接调用）。前缀在第一列。 */
-    internal fun parseTextContent(text: String): List<ParsedRule> {
-        val out = LinkedHashMap<String, ParsedRule>()
-        var firstRow = true
-        text.removePrefix("\uFEFF").lineSequence().forEach { line ->
-            val raw = line.trim()
-            if (raw.isEmpty()) return@forEach
-            val parts = if ('\t' in raw) raw.split('\t') else raw.split(',', ';')
-            val prefix = cleanPrefix(parts.getOrNull(0)) ?: return@forEach
-            if (firstRow) {
-                firstRow = false
-                if (prefix.lowercase() in HEADER_WORDS) return@forEach
-            }
-            val name = parts.getOrNull(1)?.trim().orEmpty()
-            out.putIfAbsent(
-                ruleKey(prefix, name),
-                ruleOf(
-                    prefix, name,
-                    parts.getOrNull(2), parts.getOrNull(3), parts.getOrNull(4), parts.getOrNull(5),
-                    parts.getOrNull(6)
-                )
-            )
-        }
-        return out.values.toList()
+    private fun isHeaderRow(parts: List<String>): Boolean {
+        val c0 = parts.getOrNull(0).orEmpty().trim()
+        val c1 = parts.getOrNull(1).orEmpty().trim()
+        val ascii = setOf(c0.lowercase(), c1.lowercase())
+        return c0.contains("前缀") || c0.contains("条码") ||
+            c1.contains("前缀") || c1.contains("条码") ||
+            ascii.any { it in HEADER_WORDS }
     }
 
     /** v1.12.0：同前缀可以挂多个型号，导入去重键必须带型号名称 */
     private fun ruleKey(prefix: String, name: String): String = "$prefix\u0000$name"
-
-    private fun cell(row: Row, idx: Int, fmt: DataFormatter): String? =
-        row.getCell(idx)?.let { fmt.formatCellValue(it) }
-
-    private fun isHeaderText(s: String): Boolean {
-        val t = s.trim().lowercase()
-        if (t.isEmpty()) return false
-        return t in HEADER_WORDS ||
-            t.contains("前缀") || t.contains("型号") || t.contains("名称") ||
-            t.contains("条码") || t.contains("可重复")
-    }
 
     /**
      * 前缀 + 名称 + 可选四列开关（第 3~6 列）+ 可选默认装柜数量（第 7 列）。
