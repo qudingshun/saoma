@@ -24,8 +24,9 @@ import org.junit.runner.RunWith
  *  - v12 → v13：新增 rule_models（型号），现有规则里的型号名称去重回填
  *  - v13 → v14：scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox（WiFi 同步）
  *  - v15 → v16：默认装柜数量归并到 rule_models，rule_library 去掉该列，移除 scan_setup_templates
- *  - v5 → v16 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→16 并按 16.json 校验。
+ *  - v16 → v17：规则库 prefix 唯一索引改为普通索引，允许特殊码同前缀跨型号
+ *  - v5 → v17 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→17 并按 17.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -297,9 +298,36 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v16 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v16（有 schema）→ v17：prefix 唯一索引改为普通索引，可同前缀挂多个型号 */
     @Test
-    fun migrate5To16_fullChain() {
+    fun migrate16To17_allowsDuplicatePrefixAcrossModels() {
+        helper.createDatabase(TEST_DB, 16).use { db ->
+            db.execSQL("INSERT INTO rule_models (name, defaultQuantity, updatedAt) VALUES ('A', 0, 1)")
+            db.execSQL("INSERT INTO rule_models (name, defaultQuantity, updatedAt) VALUES ('B', 0, 1)")
+            db.execSQL(
+                "INSERT INTO rule_library (prefix, name, allowDuplicate, countEnabled, checkHistory, " +
+                    "ignoreRepeat, updatedAt) VALUES ('COMMON', 'A', 1, 1, 0, 1, 1)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 17, true, AppDatabase.ALL_MIGRATIONS[15])
+        try {
+            db.execSQL(
+                "INSERT INTO rule_library (prefix, name, allowDuplicate, countEnabled, checkHistory, " +
+                    "ignoreRepeat, updatedAt) VALUES ('COMMON', 'B', 1, 1, 0, 1, 1)"
+            )
+            db.query("SELECT COUNT(*) FROM rule_library WHERE prefix = 'COMMON'").use { c ->
+                c.moveToFirst()
+                assertEquals(2, c.getInt(0))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v17 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To17_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -364,9 +392,9 @@ class MigrationTest {
             db.version = 5
         }
 
-        // 跑 5→6→…→16（起点无 schema JSON，drop 校验传 false），结束后按 16.json 全量校验
+        // 跑 5→6→…→17（起点无 schema JSON，drop 校验传 false），结束后按 17.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 16, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 15)
+            TEST_DB, 17, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 16)
         )
         try {
             // 数据保留

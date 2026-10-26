@@ -106,12 +106,14 @@ data class ScanRecord(
  *  - [countEnabled] 计入统计：不勾选 = 辅助码（只留痕不计数）
  *  - [checkHistory] 查历史串号：条码在其他柜出现过 → 报串号（防混柜）
  *  - [ignoreRepeat] 忽略（仅“可重复扫”时生效）：扫到不记录、不落盘、不计数（语音仍报“辅助码”）
- * 前缀唯一；柜子的规则仍以快照形式存在 [LoadRule]（装柜时从库复制，之后改动库不回溯）。
+ * v1.12.0：前缀不再全局唯一——普通计数码跨型号仍要校验唯一；可重复扫/辅助码/查历史/忽略等特殊码
+ * 允许不同型号共用同一前缀（例如通用固定码）。同一型号内部仍不允许重复前缀。
+ * 柜子的规则仍以快照形式存在 [LoadRule]（装柜时从库复制，之后改动库不回溯）。
  * 默认装柜数量在 [RuleModel]（型号级，v16），同一型号下所有规则共用 1 个值。
  */
 @Entity(
     tableName = "rule_library",
-    indices = [Index(value = ["prefix"], unique = true)]
+    indices = [Index(value = ["prefix"])]
 )
 data class RuleLibEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

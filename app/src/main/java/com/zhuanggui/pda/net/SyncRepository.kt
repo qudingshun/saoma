@@ -198,7 +198,7 @@ class SyncRepository(
                 )
             }
             snap.rules.forEach { r ->
-                ruleLibDao.upsert(
+                ruleLibDao.insert(
                     RuleLibEntry(
                         prefix = r.prefix,
                         name = r.name,

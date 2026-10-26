@@ -186,9 +186,9 @@ interface ScanRecordDao {
 
 @Dao
 interface RuleLibDao {
-    /** 新增或覆盖（prefix 唯一，冲突则替换：导入用） */
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(entry: RuleLibEntry): Long
+    /** 新增一条规则（v1.12.0：同前缀可挂不同型号；同一型号内的重复由业务层拦截） */
+    @Insert
+    suspend fun insert(entry: RuleLibEntry): Long
 
     /** 修改（规则编辑：前缀 / 型号 / 四个开关，v1.7.0） */
     @Update

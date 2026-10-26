@@ -62,6 +62,29 @@ class RuleExcelTest {
     }
 
     @Test
+    fun exportThenImport_keepsSamePrefixInTwoModels() {
+        val models = listOf(
+            RuleModel(id = 1, name = "MODEL_A"),
+            RuleModel(id = 2, name = "MODEL_B")
+        )
+        val rules = listOf(
+            RuleLibEntry(prefix = "COMMON", name = "MODEL_A", allowDuplicate = true, ignoreRepeat = true),
+            RuleLibEntry(prefix = "COMMON", name = "MODEL_B", allowDuplicate = true, ignoreRepeat = true)
+        )
+        val file = File.createTempFile("rules-duplicate", ".xlsx")
+        try {
+            RuleExporter.exportTo(file, models, rules)
+            val parsed = file.inputStream().use { RuleSourceImporter.parseExcel(it) }
+            val common = parsed.filter { it.prefix == "COMMON" }
+            assertEquals(2, common.size)
+            assertEquals(setOf("MODEL_A", "MODEL_B"), common.map { it.name }.toSet())
+            assertTrue(common.all { it.allowDuplicate && it.ignoreRepeat })
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun legacyPrefixFirst_withHeader_isParsed() {
         val bytes = workbook(
             listOf(

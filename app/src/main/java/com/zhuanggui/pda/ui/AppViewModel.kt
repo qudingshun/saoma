@@ -15,6 +15,8 @@ import com.zhuanggui.pda.data.entity.LoadContainer
 import com.zhuanggui.pda.data.entity.LoadRule
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
+import com.zhuanggui.pda.data.entity.isCountOnlyRule
+import com.zhuanggui.pda.data.entity.normalCountedConflictOwners
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.data.entity.SyncState
@@ -810,13 +812,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 规则选择：把规则库里选中的型号整组加入本柜。
-     * 同一型号下的多条前缀会一起传入；自动按前缀去重，连同库中四个开关一起复制，可在列表里改。
+     * v1.12.0：按规则 id 加载，避免同一前缀属于多个型号（特殊码）时取错开关；
+     * 同一型号下的多条前缀会一起传入，本柜内仍按前缀去重。
      */
-    fun addRulesFromSetup(prefixes: List<String>) {
-        if (prefixes.isEmpty()) return
+    fun addRulesFromSetup(ruleIds: List<Long>) {
+        if (ruleIds.isEmpty()) return
         viewModelScope.launch {
-            val lib = ruleLibDao.getAll().associateBy { it.prefix }
-            val picked = prefixes.mapNotNull { lib[it] }
+            val lib = ruleLibDao.getAll().associateBy { it.id }
+            val picked = ruleIds.mapNotNull { lib[it] }
             // v16：默认装柜数量在型号上只维护 1 个；勾选的规则来自同一默认值（且 >0）时自动填入计划，
             // 已手工填写计划则不覆盖。
             val modelDefaults = ruleModelDao.getAll().associate { it.name to it.defaultQuantity }
@@ -824,11 +827,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val defaultPlan = defaults.singleOrNull()
             _setup.update { s ->
                 val existing = s.rules.map { it.prefix }.toSet()
+                val toAdd = picked
+                    .filterNot { it.prefix in existing }
+                    .distinctBy { it.prefix }
                 s.copy(
-                    rules = s.rules + prefixes.filterNot { it in existing }.map { p ->
-                        val e = lib[p]
-                        if (e == null) RuleSpec(p)
-                        else RuleSpec(
+                    rules = s.rules + toAdd.map { e ->
+                        RuleSpec(
                             prefix = e.prefix,
                             allowDuplicate = e.allowDuplicate,
                             countEnabled = e.countEnabled,
@@ -867,6 +871,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 把设置页当前规则保存为规则库中的一个型号：
      *  - 型号名称 = 用户输入；计划装柜数量 = 该型号的默认装柜数量（一个型号只维护 1 个）
      *  - 当前规则的前缀 / 四个开关写入该型号；同型号会覆盖原有规则
+     *  - 普通计数码不能与其他型号重复；可重复扫 / 辅助码 / 查历史串号 / 忽略码允许跨型号共用
      *  - 之后在设置页用「从规则库选择」即可载入，不再单独保存设置方案
      *  - 流水号范围 / 末尾位数属于本柜设置，规则库不保存
      */
@@ -887,16 +892,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val oldModels = ruleModelDao.getAll()
             val oldRules = ruleLibDao.getAll()
             val existingModel = oldModels.firstOrNull { it.name == n }
-            val oldByPrefix = oldRules.associateBy { it.prefix }
+            val oldByPrefix = oldRules.groupBy { it.prefix }
             val conflicts = s.rules.mapNotNull { r ->
-                val owner = oldByPrefix[r.prefix]?.name
-                if (owner != null && owner != n) "${r.prefix}（型号 ${owner.ifBlank { "未填" }}）" else null
+                val currentIsCountOnly = isCountOnlyRule(
+                    allowDuplicate = r.allowDuplicate,
+                    countEnabled = r.countEnabled,
+                    checkHistory = r.checkHistory,
+                    ignoreRepeat = r.ignoreRepeat
+                )
+                val owners = normalCountedConflictOwners(
+                    prefix = r.prefix,
+                    targetName = n,
+                    currentIsCountOnly = currentIsCountOnly,
+                    existing = oldByPrefix[r.prefix].orEmpty()
+                ).map { it.name.ifBlank { "未填" } }.distinct()
+                if (owners.isNotEmpty()) "${r.prefix}（型号 ${owners.joinToString("、")}）" else null
             }
             if (conflicts.isNotEmpty()) {
                 _setupLibMessage.value = buildString {
-                    append("保存失败：以下前缀已属于其他型号，未修改规则库。\n")
+                    append("保存失败：以下普通计数码已属于其他型号，未修改规则库。\n")
                     append(conflicts.joinToString("、"))
-                    append("\n请先改前缀或到规则库调整所属型号。")
+                    append("\n可重复扫 / 辅助码 / 查历史串号 / 忽略码允许跨型号共用；")
+                    append("普通计数码请改前缀或调整所属型号。")
                 }
                 return@launch
             }
@@ -914,7 +931,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // 同名型号视为一次完整覆盖：先清空该型号旧规则，再写入当前规则
                 ruleLibDao.deleteByModelName(n)
                 s.rules.forEach { r ->
-                    ruleLibDao.upsert(
+                    ruleLibDao.insert(
                         RuleLibEntry(
                             prefix = r.prefix,
                             name = n,
@@ -1507,6 +1524,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _ruleLibMessage.value = "编辑时仅支持单条前缀（如需多条：删掉本条后重新新增）"
             return
         }
+        val currentIsCountOnly = isCountOnlyRule(
+            allowDuplicate = allowDuplicate,
+            countEnabled = countEnabled,
+            checkHistory = checkHistory,
+            ignoreRepeat = ignore
+        )
         viewModelScope.launch {
             if (id == null) {
                 var added = 0
@@ -1516,19 +1539,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // 规则挂在型号下：型号行不存在则补建（导入/手动新增都走这里；默认数量在型号上单独维护）
                         ruleModelDao.insert(RuleModel(name = cleanName))
                     }
-                    val existing = ruleLibDao.getAll().map { it.prefix }.toMutableSet()
+                    val existing = ruleLibDao.getAll().toMutableList()
                     cleaned.forEach { p ->
-                        if (p in existing) {
+                        val sameModel = existing.any { it.prefix == p && it.name == cleanName }
+                        val owners = normalCountedConflictOwners(
+                            prefix = p,
+                            targetName = cleanName,
+                            currentIsCountOnly = currentIsCountOnly,
+                            existing = existing
+                        )
+                        if (sameModel || owners.isNotEmpty()) {
                             conflicts.add(p)
                         } else {
-                            ruleLibDao.upsert(
-                                RuleLibEntry(
-                                    prefix = p, name = cleanName,
-                                    allowDuplicate = allowDuplicate, countEnabled = countEnabled,
-                                    checkHistory = checkHistory, ignoreRepeat = ignore
-                                )
+                            val entry = RuleLibEntry(
+                                prefix = p, name = cleanName,
+                                allowDuplicate = allowDuplicate, countEnabled = countEnabled,
+                                checkHistory = checkHistory, ignoreRepeat = ignore
                             )
-                            existing.add(p)
+                            ruleLibDao.insert(entry)
+                            existing.add(entry)
                             added++
                         }
                     }
@@ -1537,14 +1566,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     _ruleLibMessage.value = buildString {
                         append("新增 $added 条")
                         append("\n前缀已存在（未新增）：${conflicts.joinToString("、")}")
-                        append("\n（可在列表中点该行「编辑」改设置）")
+                        append("\n同一型号不能重复；普通计数码不能与其他型号重复；")
+                        append("可重复扫 / 辅助码 / 查历史串号 / 忽略码可跨型号共用。")
                     }
                 }
             } else {
                 val p = cleaned.first()
-                val conflict = ruleLibDao.getAll().any { it.prefix == p && it.id != id }
-                if (conflict) {
-                    _ruleLibMessage.value = "前缀已存在：$p"
+                val all = ruleLibDao.getAll()
+                val sameModel = all.any { it.prefix == p && it.name == cleanName && it.id != id }
+                val owners = normalCountedConflictOwners(
+                    prefix = p,
+                    targetName = cleanName,
+                    currentIsCountOnly = currentIsCountOnly,
+                    existing = all.filter { it.id != id }
+                )
+                if (sameModel || owners.isNotEmpty()) {
+                    _ruleLibMessage.value = "前缀已存在：$p\n同一型号不能重复；普通计数码不能与其他型号重复。"
                     return@launch
                 }
                 ruleLibDao.updateEntry(
@@ -1631,8 +1668,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val modelNames = parsed.map { it.name.trim() }.filter { it.isNotBlank() }.distinct()
                 val oldModels = ruleModelDao.getAll()
                 val oldRules = ruleLibDao.getAll()
-                val existing = oldRules.associateBy { it.prefix }
-                val overwrite = ruleRows.filter { it.prefix in existing }
+                // v1.12.0：同前缀可挂多个型号，导入按「前缀 + 型号」判断覆盖
+                val existing = oldRules.associateBy { it.prefix to it.name }
+                val overwrite = ruleRows.filter { (it.prefix to it.name) in existing }
                 val existingNames = (oldModels.map { it.name } + oldRules.map { it.name }).toSet()
                 _ruleImportPreview.value = RuleImportPreview(
                     rules = ruleRows,
@@ -1687,23 +1725,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             ruleModelDao.updateDefaultQuantity(oldModel.id, qtyRow.defaultQuantity, now)
                         }
                     }
-                    val existing = oldRules.associateBy { it.prefix }
+                    val existing = oldRules.associateBy { it.prefix to it.name }
                     preview.rules.forEach { p ->
-                        val old = existing[p.prefix]
+                        val old = existing[p.prefix to p.name]
                         if (old != null) updated++ else added++
                         // 导出的 XLSX 带开关 → 以文件为准；普通两列文件 → 保留库内原开关
                         val keep = p.hasFlags || old == null
-                        ruleLibDao.upsert(
-                            RuleLibEntry(
-                                prefix = p.prefix,
-                                name = p.name,
-                                allowDuplicate = if (keep) p.allowDuplicate else old.allowDuplicate,
-                                countEnabled = if (keep) p.countEnabled else old.countEnabled,
-                                checkHistory = if (keep) p.checkHistory else old.checkHistory,
-                                ignoreRepeat = if (keep) p.ignoreRepeat else old.ignoreRepeat,
-                                updatedAt = now
-                            )
+                        val entry = RuleLibEntry(
+                            id = old?.id ?: 0,
+                            prefix = p.prefix,
+                            name = p.name,
+                            allowDuplicate = if (keep) p.allowDuplicate else old.allowDuplicate,
+                            countEnabled = if (keep) p.countEnabled else old.countEnabled,
+                            checkHistory = if (keep) p.checkHistory else old.checkHistory,
+                            ignoreRepeat = if (keep) p.ignoreRepeat else old.ignoreRepeat,
+                            updatedAt = now
                         )
+                        if (old == null) ruleLibDao.insert(entry) else ruleLibDao.updateEntry(entry)
                     }
                 }
                 buildString {

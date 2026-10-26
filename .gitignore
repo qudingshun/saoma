@@ -6,6 +6,7 @@ __pycache__/
 /docs/WiFi同步/pc-server/.venv/
 /docs/WiFi同步/pc-server/build/
 /docs/WiFi同步/pc-server/dist/
+/docs/WiFi同步/pc-server/data/
 /docs/WiFi同步/pc-server/*.spec
 /.idea
 .DS_Store

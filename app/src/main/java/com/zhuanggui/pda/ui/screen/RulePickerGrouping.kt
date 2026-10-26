@@ -68,3 +68,15 @@ internal fun selectedMissingPrefixes(
 ): List<String> = selectedPickGroups(groups, checkedGroupKeys)
     .flatMap { group -> group.rules.map { it.prefix }.filterNot { it in alreadyIn } }
     .distinct()
+
+/**
+ * v1.12.0：按规则 id 返回要补加的规则。
+ * 同一前缀可能同时属于多个型号（特殊码），不能再只按前缀从库里取开关。
+ */
+internal fun selectedMissingRuleIds(
+    groups: List<RulePickGroup>,
+    checkedGroupKeys: Set<String>,
+    alreadyIn: Set<String>
+): List<Long> = selectedPickGroups(groups, checkedGroupKeys)
+    .flatMap { group -> group.rules.filterNot { it.prefix in alreadyIn }.map { it.id } }
+    .distinct()

@@ -95,7 +95,7 @@ fun OutboundSetupScreen(
     onRemoveRule: (String) -> Unit,
     onRuleFlags: (String, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onRuleSerial: (String, String, String, Int) -> Unit,
-    onAddRules: (List<String>) -> Unit,
+    onAddRules: (List<Long>) -> Unit,
     onOpenRuleLibrary: () -> Unit,
     saveMessage: String?,
     onSaveToRuleLibrary: (String) -> Unit,
@@ -644,13 +644,14 @@ private fun RuleSerialDialog(
  * 规则选择弹窗（v1.11.2）：按型号整组选择。
  * 同一型号下有多条前缀规则时，勾选型号即把该型号的全部规则一起加入本柜；
  * 若该型号部分规则已在本柜，则只补加剩余规则。
+ * v1.12.0：按规则 id 取开关，避免同一前缀被多个型号共用时取错型号的设置。
  */
 @Composable
 private fun RulePickerDialog(
     library: List<RuleLibEntry>,
     models: List<RuleModel>,
     alreadyIn: List<String>,
-    onConfirm: (List<String>) -> Unit,
+    onConfirm: (List<Long>) -> Unit,
     onDismiss: () -> Unit
 ) {
     var filter by remember { mutableStateOf("") }
@@ -661,7 +662,7 @@ private fun RulePickerDialog(
     val filtered = if (filter.isBlank()) allGroups
     else buildRulePickGroups(library, modelDefaults, alreadyInSet, filter)
     val selectedGroups = selectedPickGroups(allGroups, checkedGroupKeys)
-    val selectedMissing = selectedMissingPrefixes(allGroups, checkedGroupKeys, alreadyInSet)
+    val selectedMissing = selectedMissingRuleIds(allGroups, checkedGroupKeys, alreadyInSet)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -796,6 +797,7 @@ private fun SaveToRuleLibraryDialog(
                 Text(
                     "将把当前 $ruleCount 条规则（前缀 + 四个开关）保存为该型号，计划装柜数量 " +
                         (if (plan > 0) "$plan 件" else "不限") + " 作为该型号的默认数量。\n" +
+                        "普通计数码不能与其他型号重复；可重复扫 / 辅助码 / 查历史串号 / 忽略码可跨型号共用。\n" +
                         "流水号范围 / 末尾位数只在本柜有效，不写入规则库。\n" +
                         "以后在设置页点「从规则库选择」选该型号即可载入。",
                     fontSize = 11.sp, color = Color.Gray,

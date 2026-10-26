@@ -68,7 +68,7 @@ object RuleSourceImporter {
     }
 
     internal fun parseExcel(input: InputStream): List<ParsedRule> {
-        val out = LinkedHashMap<String, ParsedRule>()       // key = prefix
+        val out = LinkedHashMap<String, ParsedRule>()       // key = prefix + name（v1.12.0 允许同前缀跨型号）
         val models = LinkedHashMap<String, ParsedRule>()    // key = 型号名称（空规则）
         val fmt = DataFormatter()
         WorkbookFactory.create(input).use { wb ->
@@ -112,7 +112,7 @@ object RuleSourceImporter {
                 }
                 val flags = arrayOf(cell(row, 2, fmt), cell(row, 3, fmt), cell(row, 4, fmt), cell(row, 5, fmt))
                 out.putIfAbsent(
-                    prefix,
+                    ruleKey(prefix, name),
                     ruleOf(prefix, name, flags[0], flags[1], flags[2], flags[3], cell(row, 6, fmt))
                 )
             }
@@ -140,7 +140,7 @@ object RuleSourceImporter {
             }
             val name = parts.getOrNull(1)?.trim().orEmpty()
             out.putIfAbsent(
-                prefix,
+                ruleKey(prefix, name),
                 ruleOf(
                     prefix, name,
                     parts.getOrNull(2), parts.getOrNull(3), parts.getOrNull(4), parts.getOrNull(5),
@@ -150,6 +150,9 @@ object RuleSourceImporter {
         }
         return out.values.toList()
     }
+
+    /** v1.12.0：同前缀可以挂多个型号，导入去重键必须带型号名称 */
+    private fun ruleKey(prefix: String, name: String): String = "$prefix\u0000$name"
 
     private fun cell(row: Row, idx: Int, fmt: DataFormatter): String? =
         row.getCell(idx)?.let { fmt.formatCellValue(it) }

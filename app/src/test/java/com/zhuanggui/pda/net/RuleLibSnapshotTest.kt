@@ -39,6 +39,23 @@ class RuleLibSnapshotTest {
     }
 
     @Test
+    fun parseServerSnapshot_keepsSamePrefixInTwoModels() {
+        val snap = RuleLibSnapshot.fromJson(
+            JSONObject(
+                """
+                {"ok":true,"hasData":true,"rev":2,"models":["A","B"],
+                 "rules":[
+                   {"prefix":"COMMON","name":"A","allowDuplicate":true,"countEnabled":false},
+                   {"prefix":"COMMON","name":"B","allowDuplicate":true,"countEnabled":false}
+                 ]}
+                """.trimIndent()
+            )
+        )
+        assertEquals(2, snap.rules.size)
+        assertEquals(setOf("A", "B"), snap.rules.map { it.name }.toSet())
+    }
+
+    @Test
     fun emptyServerSnapshot() {
         val snap = RuleLibSnapshot.fromJson(
             JSONObject("""{"ok":true,"hasData":false,"rev":0,"models":[],"rules":[]}""")

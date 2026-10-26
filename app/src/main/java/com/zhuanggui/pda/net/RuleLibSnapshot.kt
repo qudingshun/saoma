@@ -69,7 +69,8 @@ data class RuleLibSnapshot(
                 hasData = o.optBoolean("hasData", rev > 0 || models.isNotEmpty() || rules.isNotEmpty()),
                 rev = rev,
                 models = models.distinct().sorted(),
-                rules = rules.distinctBy { it.prefix }.sortedWith(compareBy({ it.name }, { it.prefix })),
+                rules = rules.distinctBy { it.prefix to it.name }
+                    .sortedWith(compareBy({ it.name }, { it.prefix })),
                 updatedAt = o.optString("updatedAt"),
                 updatedBy = o.optString("updatedBy")
             )

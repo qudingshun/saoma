@@ -28,7 +28,7 @@ import com.zhuanggui.pda.data.entity.SyncState
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class, RuleModel::class,
         SyncState::class, SyncInbox::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -296,7 +296,7 @@ abstract class AppDatabase : RoomDatabase() {
         /**
          * v15 → v16：默认装柜数量改为「型号级只维护 1 个」。
          *  - rule_models 加 defaultQuantity，旧规则上的默认数量按型号取最大值回填
-         *  - rule_library 去掉 defaultQuantity（重建表，保持 prefix 唯一索引）
+         *  - rule_library 去掉 defaultQuantity（重建表；v16 仍保持 prefix 唯一索引，v17 再放开）
          *  - 移除独立的设置方案表（保存方案改为写入规则库型号）
          */
         private val MIGRATION_15_16 = object : Migration(15, 16) {
@@ -336,12 +336,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v16 → v17：规则库前缀允许跨型号共用（v1.12.0）。
+         * 普通计数码的唯一性改为保存时校验；可重复扫/辅助/查历史/忽略等特殊码可同前缀挂多个型号。
+         * 原 prefix 唯一索引改为普通索引，保留前缀查询性能。
+         */
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP INDEX IF EXISTS `index_rule_library_prefix`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_rule_library_prefix` " +
+                        "ON `rule_library` (`prefix`)"
+                )
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
             MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
-            MIGRATION_14_15, MIGRATION_15_16
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
         )
     }
 }

@@ -689,7 +689,7 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
 
     models = sorted({str(m or "").strip()[:64] for m in raw_models if str(m or "").strip()})
     rules: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for r in raw_rules:
         if not isinstance(r, dict):
             continue
@@ -697,10 +697,11 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
         if not re.fullmatch(r"[A-Z0-9]{1,64}", prefix):
             raise HTTPException(status_code=422, detail={
                 "error": {"code": "VALIDATION", "message": f"前缀无效：{prefix[:32]}"}})
-        if prefix in seen:
-            continue                    # 同前缀只保留第一条（与 PDA 规则库唯一键一致）
-        seen.add(prefix)
         name = str(r.get("name") or "").strip()[:64]
+        key = (prefix, name)
+        if key in seen:
+            continue                    # v1.12.0：同前缀可挂多个型号，仅同型号内去重
+        seen.add(key)
         has_default = "defaultQuantity" in r and str(r.get("defaultQuantity") or "").strip() != ""
         rules.append({
             "prefix": prefix,
@@ -723,14 +724,15 @@ def _save_rulelib(raw_models, raw_rules, device: str) -> dict:
     ts = now_iso()
     with closing(db()) as conn:
         old = _rulelib_row(conn)
-        # 旧格式 Excel 没有第 7 列时，按前缀保留电脑端已有默认数量
+        # 旧格式 Excel 没有第 7 列时，按「前缀 + 型号」保留电脑端已有默认数量
         old_defaults = {
-            r.get("prefix"): _xlsx_int(r.get("defaultQuantity"), 0)
+            (r.get("prefix"), r.get("name") or ""): _xlsx_int(r.get("defaultQuantity"), 0)
             for r in (old["rules"] if old else [])
         }
         for r in rules:
             if r.get("defaultQuantity", -1) < 0:
-                r["defaultQuantity"] = old_defaults.get(r["prefix"], 0)
+                r["defaultQuantity"] = old_defaults.get(
+                    (r.get("prefix"), r.get("name") or ""), 0)
         backup_name = ""
         if old:
             RULELIB_BACKUP_DIR.mkdir(exist_ok=True)
@@ -820,7 +822,7 @@ def _parse_rulelib_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
             "error": {"code": "BAD_XLSX", "message": "Excel 没有工作表"}})
 
     models: set[str] = set()
-    rules: dict[str, dict] = {}
+    rules: dict[tuple[str, str], dict] = {}
     name_first: bool | None = None
     for row in ws.iter_rows(values_only=True):
         vals = [("" if v is None else str(v)).strip() for v in (list(row) + [""] * 7)[:7]]
@@ -841,7 +843,8 @@ def _parse_rulelib_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
             continue
         if name:
             models.add(name)
-        if prefix not in rules:
+        key = (prefix, name)
+        if key not in rules:
             rule = {
                 "prefix": prefix,
                 "name": name,
@@ -850,10 +853,10 @@ def _parse_rulelib_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
                 "checkHistory": _xlsx_flag(vals[4], False),
                 "ignoreRepeat": _xlsx_flag(vals[5], False),
             }
-            # 旧六列 Excel 不带第 7 列：不写该字段，保存时按前缀保留旧默认数量
+            # 旧六列 Excel 不带第 7 列：不写该字段，保存时按「前缀 + 型号」保留旧默认数量
             if vals[6].strip():
                 rule["defaultQuantity"] = _xlsx_int(vals[6], 0)
-            rules[prefix] = rule
+            rules[key] = rule
     return sorted(models), list(rules.values())
 
 

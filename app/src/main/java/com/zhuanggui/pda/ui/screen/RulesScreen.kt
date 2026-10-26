@@ -290,6 +290,7 @@ fun RulesScreen(
 
             Text(
                 "先新增型号，再维护多条规则；默认装柜数量按型号只维护 1 个。\n" +
+                    "普通计数码不能与其他型号重复；可重复扫 / 辅助码 / 查历史串号 / 忽略码可跨型号共用。\n" +
                     "规则前缀可用扫码枪直接录入；导入/导出 XLSX（型号 / 前缀 / 四个开关 / 默认数量）。",
                 fontSize = 11.sp, color = Color.Gray,
                 modifier = Modifier.padding(top = 2.dp)

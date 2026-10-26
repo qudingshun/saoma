@@ -8,7 +8,8 @@ import org.junit.Test
 
 class RulePickerGroupingTest {
 
-    private fun rule(prefix: String, name: String) = RuleLibEntry(prefix = prefix, name = name)
+    private fun rule(prefix: String, name: String, id: Long = 0) =
+        RuleLibEntry(id = id, prefix = prefix, name = name)
 
     @Test
     fun sameModelRulesStayInOneGroup() {
@@ -105,6 +106,22 @@ class RulePickerGroupingTest {
             listOf("AAA", "BBB"),
             selectedMissingPrefixes(groups, setOf(t45.key), emptySet())
         )
+    }
+
+    @Test
+    fun samePrefixCanLiveInTwoModelsAndLoadsById() {
+        val a = rule("COMMON", "MODEL_A", id = 1)
+        val b = rule("COMMON", "MODEL_B", id = 2)
+        val groups = buildRulePickGroups(
+            library = listOf(a, b),
+            modelDefaults = emptyMap(),
+            alreadyIn = emptySet(),
+            filter = "COMMON"
+        )
+
+        assertEquals(2, groups.size)
+        val modelB = groups.first { it.name == "MODEL_B" }
+        assertEquals(listOf(2L), selectedMissingRuleIds(groups, setOf(modelB.key), emptySet()))
     }
 
     @Test
