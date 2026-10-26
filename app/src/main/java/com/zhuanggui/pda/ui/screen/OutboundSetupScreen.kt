@@ -629,7 +629,11 @@ private fun RuleSerialDialog(
     )
 }
 
-/** 规则选择弹窗：从规则库多选加入本柜（已在本柜的显示为选中且不可点；连同四个开关一起复制） */
+/**
+ * 规则选择弹窗（v1.11.2）：按型号整组选择。
+ * 同一型号下有多条前缀规则时，勾选型号即把该型号的全部规则一起加入本柜；
+ * 若该型号部分规则已在本柜，则只补加剩余规则。
+ */
 @Composable
 private fun RulePickerDialog(
     library: List<RuleLibEntry>,
@@ -639,13 +643,14 @@ private fun RulePickerDialog(
     onDismiss: () -> Unit
 ) {
     var filter by remember { mutableStateOf("") }
-    var checkedPrefixes by remember { mutableStateOf(setOf<String>()) }
+    var checkedGroupKeys by remember { mutableStateOf(setOf<String>()) }
     val modelDefaults = models.associate { it.name to it.defaultQuantity }
-
-    val filtered = if (filter.isBlank()) library
-    else library.filter {
-        it.prefix.contains(filter, ignoreCase = true) || it.name.contains(filter, ignoreCase = true)
-    }
+    val alreadyInSet = alreadyIn.toSet()
+    val allGroups = buildRulePickGroups(library, modelDefaults, alreadyInSet, "")
+    val filtered = if (filter.isBlank()) allGroups
+    else buildRulePickGroups(library, modelDefaults, alreadyInSet, filter)
+    val selectedGroups = selectedPickGroups(allGroups, checkedGroupKeys)
+    val selectedMissing = selectedMissingPrefixes(allGroups, checkedGroupKeys, alreadyInSet)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -659,6 +664,12 @@ private fun RulePickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "按型号整组添加：一个型号下的多条规则会一起加入本柜。",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
                 Spacer(Modifier.height(6.dp))
                 if (library.isEmpty()) {
                     Text(
@@ -667,52 +678,58 @@ private fun RulePickerDialog(
                     )
                 } else {
                     LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                        items(filtered, key = { it.id }) { entry ->
-                            val inContainer = entry.prefix in alreadyIn
-                            val isChecked = inContainer || entry.prefix in checkedPrefixes
+                        items(filtered, key = { it.key }) { group ->
+                            val inContainer = group.allInContainer
+                            val isChecked = inContainer || group.key in checkedGroupKeys
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clickable(enabled = !inContainer) {
-                                        checkedPrefixes =
-                                            if (entry.prefix in checkedPrefixes) checkedPrefixes - entry.prefix
-                                            else checkedPrefixes + entry.prefix
+                                    .clickable(enabled = !inContainer && group.missingCount > 0) {
+                                        checkedGroupKeys =
+                                            if (group.key in checkedGroupKeys) checkedGroupKeys - group.key
+                                            else checkedGroupKeys + group.key
                                     }
                                     .padding(vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Checkbox(
                                     checked = isChecked,
-                                    enabled = !inContainer,
+                                    enabled = !inContainer && group.missingCount > 0,
                                     onCheckedChange = null
                                 )
                                 Column(Modifier.weight(1f)) {
-                                    // v1.7.3：名称（型号）作为主要显示，前缀/开关作为细则次要显示
-                                    val primary = entry.name.ifBlank { entry.prefix }
                                     Text(
-                                        primary,
+                                        group.name,
                                         fontSize = 16.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     val detail = buildString {
-                                        if (entry.name.isNotBlank()) append(entry.prefix)
-                                        flagSummary(entry)?.let {
-                                            if (isNotEmpty()) append("  ")
-                                            append(it)
-                                        }
-                                        val qty = modelDefaults[entry.name] ?: 0
-                                        if (qty > 0) {
-                                            if (isNotEmpty()) append("  ")
-                                            append("默认 $qty 件")
+                                        append("${group.rules.size} 条规则：")
+                                        append(group.rules.joinToString("、") { it.prefix })
+                                        if (group.defaultQuantity > 0) {
+                                            append("  ·  默认 ${group.defaultQuantity} 件")
                                         }
                                     }
-                                    if (detail.isNotBlank()) {
-                                        Text(detail, fontSize = 12.sp, color = Color.Gray)
+                                    Text(
+                                        detail,
+                                        fontSize = 12.sp,
+                                        color = Color.Gray,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (group.inContainerCount > 0) {
+                                        Text(
+                                            if (inContainer) {
+                                                "已在本柜（${group.rules.size} 条）"
+                                            } else {
+                                                "已在本柜 ${group.inContainerCount}/${group.rules.size} 条，" +
+                                                    "选择后补加剩余 ${group.missingCount} 条"
+                                            },
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF1976D2)
+                                        )
                                     }
-                                }
-                                if (inContainer) {
-                                    Text("已在本柜", fontSize = 12.sp, color = Color.Gray)
                                 }
                             }
                             HorizontalDivider(thickness = 0.5.dp)
@@ -732,9 +749,11 @@ private fun RulePickerDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(checkedPrefixes.toList()) },
-                enabled = checkedPrefixes.isNotEmpty()
-            ) { Text("添加选中（${checkedPrefixes.size}）") }
+                onClick = { onConfirm(selectedMissing) },
+                enabled = selectedMissing.isNotEmpty()
+            ) {
+                Text("添加选中（${selectedGroups.size} 个型号 / ${selectedMissing.size} 条规则）")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )

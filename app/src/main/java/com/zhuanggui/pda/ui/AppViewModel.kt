@@ -801,7 +801,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 规则选择：把规则库里勾选的前缀批量加入本柜（自动去重；连同库中四个开关一起复制，可在列表里改） */
+    /**
+     * 规则选择：把规则库里选中的型号整组加入本柜。
+     * 同一型号下的多条前缀会一起传入；自动按前缀去重，连同库中四个开关一起复制，可在列表里改。
+     */
     fun addRulesFromSetup(prefixes: List<String>) {
         if (prefixes.isEmpty()) return
         viewModelScope.launch {
