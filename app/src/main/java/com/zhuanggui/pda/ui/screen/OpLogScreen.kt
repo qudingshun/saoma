@@ -33,8 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.zhuanggui.pda.StorageConfig
+import com.zhuanggui.pda.export.FileExporter
 import com.zhuanggui.pda.log.OpLog
-import java.io.File
 
 /**
  * 操作日志（v1.10.1）：试运行阶段的问题追溯。
@@ -42,7 +43,7 @@ import java.io.File
  * - 记录内容：每枪扫码（柜号/条码/判定结果/是否落盘成功）、落盘失败原因、删除/撤回/恢复、
  *   回收站清空、启动与存储状态、崩溃堆栈等
  * - 落盘位置：App 内部 files/logs/oplog_yyyyMMdd.log（卸载才清）
- * - 导出：点「导出到 /sdcard/zhuanggui/日志/」后，U 盘直接拷该目录即可
+ * - 导出：点「导出到 <保存目录>/日志/」后，U 盘直接拷该目录即可
  */
 @Composable
 fun OpLogScreen(onBack: () -> Unit) {
@@ -99,14 +100,14 @@ fun OpLogScreen(onBack: () -> Unit) {
                         ) { Text("刷新", fontSize = 12.sp) }
                         Button(
                             onClick = {
-                                val dir = File(Environment.getExternalStorageDirectory(), "zhuanggui/日志")
+                                val dir = FileExporter.logDir()
                                 val f = OpLog.export(context, dir)
-                                message = if (f != null) "已导出：${f.absolutePath}"
-                                else "导出失败：请检查「所有文件访问」权限或 /sdcard 空间"
+                                message = if (f != null) "已导出：${StorageConfig.pretty(f)}"
+                                else "导出失败：请检查「所有文件访问」权限或存储空间"
                             },
                             contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.weight(1f).height(40.dp)
-                        ) { Text("导出到 /sdcard/zhuanggui/日志/", fontSize = 11.sp) }
+                        ) { Text("导出到 ${StorageConfig.pretty(FileExporter.logDir())}/", fontSize = 11.sp) }
                         OutlinedButton(
                             onClick = { confirmClear = true },
                             contentPadding = PaddingValues(horizontal = 8.dp),

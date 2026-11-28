@@ -34,6 +34,8 @@ data class LoadContainer(
  * serialTailLen（v12）：>0 = 取条码「末尾 N 位数字」作为流水号（先忽略末尾字母/符号），
  * 用于条码中间还有不参与核对的字符/数字、流水号在末尾的情况（如 ASV12SDFWG05455056$ → 056）。
  * 0 = 旧语义（前缀之后整段必须是纯数字）。
+ * serialAlarmInRange（v18）：勾选后流水号范围改为「报警范围」（黑名单）——落在范围内报警，
+ * 范围外正常；未勾选仍是原来的「允许范围」（白名单）。
  */
 @Entity(
     tableName = "load_rules",
@@ -57,6 +59,7 @@ data class LoadRule(
     val serialMin: String = "",               // 流水号最小值（前缀之后的数字下界；空 = 不限，v11）
     val serialMax: String = "",               // 流水号最大值（前缀之后的数字上界；空 = 不限，v11）
     val serialTailLen: Int = 0,               // 流水号取末尾 N 位数字（0 = 前缀后整段，v12）
+    val serialAlarmInRange: Boolean = false,  // 范围内报警：勾选后，流水号落在范围内反而报警（黑名单，v18）
     val ignoreRepeat: Boolean = false         // 忽略（仅“可重复扫”时生效）：扫到不记录、不落盘、不计数（v11）
 )
 

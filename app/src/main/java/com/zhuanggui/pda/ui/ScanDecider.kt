@@ -7,6 +7,7 @@ import com.zhuanggui.pda.data.entity.ScanResult
  *
  * 判定顺序（业务契约，不要随意调整）：
  *  1. 规则不匹配（串号）—— 本柜规则优先于一切
+ *  1.5 流水号命中报警范围（v1.13.0 黑名单）—— 每枪都报警，优先于重复/历史
  *  2. 同柜重复（已录入过；规则勾选“允许重复”时调用方传 dupCount = 0）
  *  3. 历史串号（条码曾在其他柜录入过；仅当规则勾选「查历史串号」）
  *  4. 辅助码（规则标记为不计入统计）—— 必须先于超量：辅助码不应被超量拦截
@@ -23,9 +24,11 @@ fun decideScanResult(
     historyHit: Boolean,
     countEnabled: Boolean,
     total: Int,
-    okCount: Int
+    okCount: Int,
+    rangeAlarm: Boolean = false
 ): ScanResult = when {
     !matched -> ScanResult.SERIAL_MISMATCH
+    rangeAlarm -> ScanResult.SERIAL_ALARM
     dupCount > 0 -> ScanResult.DUPLICATE
     historyHit -> ScanResult.SERIAL_MISMATCH
     !countEnabled -> ScanResult.AUX

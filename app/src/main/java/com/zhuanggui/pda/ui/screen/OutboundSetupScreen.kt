@@ -94,7 +94,7 @@ fun OutboundSetupScreen(
     onAddRule: () -> Unit,
     onRemoveRule: (String) -> Unit,
     onRuleFlags: (String, Boolean, Boolean, Boolean, Boolean) -> Unit,
-    onRuleSerial: (String, String, String, Int) -> Unit,
+    onRuleSerial: (String, String, String, Int, Boolean) -> Unit,
     onAddRules: (List<Long>) -> Unit,
     onOpenRuleLibrary: () -> Unit,
     saveMessage: String?,
@@ -114,8 +114,8 @@ fun OutboundSetupScreen(
         RuleSerialDialog(
             rule = rule,
             onDismiss = { serialRule = null },
-            onSave = { mn, mx, tail ->
-                onRuleSerial(rule.prefix, mn, mx, tail)
+            onSave = { mn, mx, tail, alarm ->
+                onRuleSerial(rule.prefix, mn, mx, tail, alarm)
                 serialRule = null
             }
         )
@@ -560,7 +560,12 @@ fun OutboundSetupScreen(
 
 /** 规则行「流水」标签：点击可补录/修改范围；未设时显示「设范围」，末尾位数模式带「末N位」前缀 */
 private fun serialRangeLabel(rule: RuleSpec): String {
-    val tail = if (rule.serialTailLen > 0) "末${rule.serialTailLen}位 " else "流水 "
+    val tail = when {
+        rule.serialAlarmInRange && rule.serialTailLen > 0 -> "报警 末${rule.serialTailLen}位 "
+        rule.serialAlarmInRange -> "报警 "
+        rule.serialTailLen > 0 -> "末${rule.serialTailLen}位 "
+        else -> "流水 "
+    }
     return when {
         rule.serialMin.isNotBlank() && rule.serialMax.isNotBlank() -> "$tail${rule.serialMin}-${rule.serialMax}"
         rule.serialMin.isNotBlank() -> "$tail≥${rule.serialMin}"
@@ -575,11 +580,13 @@ private fun serialRangeLabel(rule: RuleSpec): String {
 private fun RuleSerialDialog(
     rule: RuleSpec,
     onDismiss: () -> Unit,
-    onSave: (String, String, Int) -> Unit
+    onSave: (String, String, Int, Boolean) -> Unit
 ) {
     var mn by remember { mutableStateOf(rule.serialMin) }
     var mx by remember { mutableStateOf(rule.serialMax) }
     var tail by remember { mutableStateOf(if (rule.serialTailLen > 0) rule.serialTailLen.toString() else "") }
+    var alarm by remember { mutableStateOf(rule.serialAlarmInRange) }
+    val hasRange = mn.isNotBlank() || mx.isNotBlank()
     val invalid = mn.isNotBlank() && mx.isNotBlank() &&
         runCatching { java.math.BigInteger(mn) > java.math.BigInteger(mx) }.getOrDefault(false)
     AlertDialog(
@@ -612,12 +619,29 @@ private fun RuleSerialDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = alarm,
+                        onCheckedChange = { alarm = it },
+                        enabled = hasRange
+                    )
+                    Text(
+                        "范围内报警（黑名单）",
+                        fontSize = 12.sp,
+                        color = if (hasRange) Color.Unspecified else Color.Gray
+                    )
+                }
                 if (invalid) {
                     Text("最小值不能大于最大值", fontSize = 11.sp, color = Color(0xFFD32F2F))
                 } else {
                     Text(
-                        "普通条码：前缀后整段须为纯数字并在范围内。\n" +
-                            "条码中间有无关字符/数字、流水号在末尾时：位数填 3，则 ASV12SDFWG05455056$ 取「056」核对（末尾符号忽略）。",
+                        if (alarm && hasRange) {
+                            "报警模式：流水号落在范围内 → 报警（按异常记录、不计数）；范围外 → 正常。\n" +
+                                "适合拦截已知问题批次/已出库流水号。"
+                        } else {
+                            "普通模式：前缀后整段须为纯数字并在范围内；范围外报串号。\n" +
+                                "条码中间有无关字符/数字、流水号在末尾时：位数填 3，则 ASV12SDFWG05455056$ 取「056」核对（末尾符号忽略）。"
+                        },
                         fontSize = 11.sp, color = Color(0xFF666666)
                     )
                 }
@@ -625,14 +649,14 @@ private fun RuleSerialDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(mn, mx, tail.toIntOrNull() ?: 0) },
+                onClick = { onSave(mn, mx, tail.toIntOrNull() ?: 0, alarm && hasRange) },
                 enabled = !invalid
             ) { Text("保存") }
         },
         dismissButton = {
             Row {
                 if (rule.serialMin.isNotBlank() || rule.serialMax.isNotBlank() || rule.serialTailLen > 0) {
-                    TextButton(onClick = { onSave("", "", 0) }) { Text("清除") }
+                    TextButton(onClick = { onSave("", "", 0, false) }) { Text("清除") }
                 }
                 TextButton(onClick = onDismiss) { Text("取消") }
             }

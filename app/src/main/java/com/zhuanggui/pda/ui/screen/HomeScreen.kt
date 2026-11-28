@@ -57,6 +57,7 @@ fun HomeScreen(
     onRecords: () -> Unit,
     onSync: () -> Unit,
     onScannerSetup: () -> Unit,
+    onStorageSettings: () -> Unit,
     onOpLog: () -> Unit
 ) {
     Scaffold { pad ->
@@ -73,10 +74,16 @@ fun HomeScreen(
             Modifier
                 .padding(pad)
                 .fillMaxSize()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 24.dp, vertical = 12.dp)
         ) {
+            // 主入口区域：占满剩余高度并垂直居中；版权信息固定在页面最下方
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             // logo 为透明底黑字图：套白色圆角底卡（固定浅色主题见 Theme.kt）
             Image(
                 painter = painterResource(R.drawable.logo),
@@ -112,7 +119,7 @@ fun HomeScreen(
             }
             if (!hasStorage) {
                 Text(
-                    "⚠ 无法写入 /sdcard/zhuanggui：记录不会自动落盘；点上方按钮按提示授权后返回本页即消失",
+                    "⚠ 无法写入 ${FileExporter.displayPath()}：记录不会自动落盘；点上方按钮按提示授权后返回本页即消失",
                     fontSize = 12.sp, color = Color(0xFFD32F2F),
                     modifier = Modifier.padding(top = 6.dp)
                 )
@@ -179,6 +186,14 @@ fun HomeScreen(
                     .padding(top = 6.dp)
             )
             Text(
+                "保存目录（记录 / 规则 / 日志）",
+                fontSize = 13.sp,
+                color = Color(0xFF1976D2),
+                modifier = Modifier
+                    .clickable { onStorageSettings() }
+                    .padding(top = 4.dp)
+            )
+            Text(
                 "操作日志（试运行追溯 / 导出）",
                 fontSize = 13.sp,
                 color = Color(0xFF1976D2),
@@ -186,6 +201,27 @@ fun HomeScreen(
                     .clickable { onOpLog() }
                     .padding(top = 4.dp)
             )
+            }
+
+            // 版权信息：固定在首页最下方
+            Column(
+                Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(top = 8.dp, bottom = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "© 2026 qudingshun · AI 版权所有",
+                    fontSize = 11.sp,
+                    color = Color(0xFF9E9E9E)
+                )
+                Text(
+                    "由 DeepSeek 辅助开发",
+                    fontSize = 10.sp,
+                    color = Color(0xFFBDBDBD),
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
         }
     }
 }

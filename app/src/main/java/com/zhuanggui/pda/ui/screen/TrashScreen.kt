@@ -125,6 +125,7 @@ private fun TrashRow(r: ScanRecord, onRestore: () -> Unit) {
     val (tag, tagColor) = when (r.result) {
         ScanResult.OK -> "正常" to Color(0xFF388E3C)
         ScanResult.SERIAL_MISMATCH -> "串号" to Color(0xFFD32F2F)
+        ScanResult.SERIAL_ALARM -> "报警" to Color(0xFFD32F2F)
         ScanResult.DUPLICATE -> "重复" to Color(0xFFD32F2F)
         ScanResult.OVER_LIMIT -> "超量" to Color(0xFFF57F17)
         ScanResult.AUX -> "辅助" to Color(0xFF1976D2)

@@ -27,8 +27,8 @@ android {
         // 建目录写文件（targetSdk 30+ 时 MANAGE_EXTERNAL_STORAGE 也救不了组权限 → 表现为
         // 「有权限却写不进 /sdcard」）。29 还能保留 requestLegacyExternalStorage 的旧行为。
         targetSdk = 29
-        versionCode = 41
-        versionName = "1.12.1"
+        versionCode = 42
+        versionName = "1.13.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

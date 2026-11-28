@@ -62,6 +62,7 @@ enum class SetupScanTarget { RULE, OPERATOR }
  *  - [serialMin] / [serialMax] 流水号范围（v1.7.0）：前缀之后的数字须落在范围内，空 = 该侧不限
  *  - [serialTailLen] 末尾流水号位数（v1.7.2）：>0 = 取条码末尾 N 位数字作为流水号（忽略末尾符号），
  *    用于中间还有不参与核对的字符/数字、流水号在末尾的条码；0 = 前缀后整段数字
+ *  - [serialAlarmInRange] 范围内报警（v1.13.0）：勾选后范围变黑名单——范围内报警、范围外正常
  *  - [ignoreRepeat] 忽略（v1.7.0）：仅「可重复扫」时生效，扫到不记录、不落盘、不计数（语音报“辅助码”）
  */
 data class RuleSpec(
@@ -72,6 +73,7 @@ data class RuleSpec(
     val serialMin: String = "",
     val serialMax: String = "",
     val serialTailLen: Int = 0,
+    val serialAlarmInRange: Boolean = false,
     val ignoreRepeat: Boolean = false
 )
 
@@ -128,6 +130,7 @@ data class OutboundScanState(
     val mismatchCount: Int = 0,                // 串号
     val duplicateCount: Int = 0,               // 重复
     val overCount: Int = 0,                    // 超量
+    val alarmCount: Int = 0,                   // 流水号命中报警范围（v1.13.0）
     val lastFullCode: String = "",             // 柜号，条码
     val lastBarcode: String = "",
     val lastMessage: String = "",
@@ -659,6 +662,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         serialMin = it.serialMin,
                         serialMax = it.serialMax,
                         serialTailLen = it.serialTailLen,
+                        serialAlarmInRange = it.serialAlarmInRange,
                         ignoreRepeat = it.ignoreRepeat
                     )
                 }
@@ -796,15 +800,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 列表里补录/修改某条规则（含从规则库导入的）的流水号范围；
      * 两项都留空 = 不限制。只保留数字（与录入时一致），避免非法值导致全部条码报串号。
      * [serialTailLen] > 0 = 取条码末尾 N 位数字作为流水号（忽略末尾符号），0 = 前缀后整段。
+     * [serialAlarmInRange] = true 时范围改为「报警范围」（范围内报警、范围外正常）。
      */
-    fun updateRuleSerial(prefix: String, serialMin: String, serialMax: String, serialTailLen: Int) {
+    fun updateRuleSerial(
+        prefix: String,
+        serialMin: String,
+        serialMax: String,
+        serialTailLen: Int,
+        serialAlarmInRange: Boolean = false
+    ) {
         val mn = serialMin.filter { it.isDigit() }.take(12)
         val mx = serialMax.filter { it.isDigit() }.take(12)
         val tail = serialTailLen.coerceIn(0, 20)
         _setup.update { s ->
             s.copy(rules = s.rules.map {
                 if (it.prefix == prefix) it.copy(
-                    serialMin = mn, serialMax = mx, serialTailLen = tail
+                    serialMin = mn,
+                    serialMax = mx,
+                    serialTailLen = tail,
+                    serialAlarmInRange = serialAlarmInRange && (mn.isNotEmpty() || mx.isNotEmpty())
                 ) else it
             })
         }
@@ -1050,6 +1064,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                     serialMin = it.serialMin,
                                     serialMax = it.serialMax,
                                     serialTailLen = it.serialTailLen,
+                                    serialAlarmInRange = it.serialAlarmInRange,
                                     ignoreRepeat = it.ignoreRepeat
                                 )
                             )
@@ -1074,6 +1089,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         operatorId = s.operatorId,
                         okCount = counts.ok, mismatchCount = counts.mm,
                         duplicateCount = counts.dup, overCount = counts.over,
+                        alarmCount = counts.alarm,
                         totalRecords = counts.total,
                         lastMessage = when {
                             total > 0 && counts.ok >= total ->
@@ -1173,6 +1189,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val deletable = rec.result == ScanResult.OK ||
                     rec.result == ScanResult.DUPLICATE ||
                     rec.result == ScanResult.SERIAL_MISMATCH ||
+                    rec.result == ScanResult.SERIAL_ALARM ||
                     rec.result == ScanResult.AUX ||
                     rec.result == ScanResult.OVER_LIMIT
                 if (!deletable) return@withLock
@@ -1286,20 +1303,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val st = _outbound.value
                     val container = st.activeContainer ?: return@withLock
 
-                    // 前缀匹配 + 流水号范围（v1.7.0 第 1 条：规则可限定流水号区间；未填范围则不校验）
+                    // 前缀匹配 + 流水号范围（v1.7.0；v1.13.0 增加「范围内报警」黑名单模式）
+                    //  - 普通规则（白名单）：未设范围或流水号在范围内 → 正常；范围内无命中 → 串号
+                    //  - 报警规则（黑名单）：流水号在范围内 → 报警；范围外 → 正常
                     val prefixSpecs = st.rules.filter { barcode.startsWith(it.prefix) }
-                    val matchedSpecs = prefixSpecs.filter {
+                    val inRangeSpecs = prefixSpecs.filter {
                         serialInRange(
                             barcode.removePrefix(it.prefix),
                             it.serialMin, it.serialMax, it.serialTailLen
                         )
                     }
-                    val matched = st.rules.isEmpty() || matchedSpecs.isNotEmpty()
-                    val rangeFiltered = prefixSpecs.isNotEmpty() && matchedSpecs.isEmpty()
+                    val alarmSpec = inRangeSpecs.firstOrNull {
+                        it.serialAlarmInRange && hasSerialRange(it)
+                    }
+                    val rangeAlarm = alarmSpec != null
+                    val allowMatched = inRangeSpecs.any {
+                        !it.serialAlarmInRange || !hasSerialRange(it)
+                    }
+                    val blockMatched = prefixSpecs.any { it.serialAlarmInRange && hasSerialRange(it) }
+                    val matched = st.rules.isEmpty() || allowMatched || blockMatched || rangeAlarm
+                    val rangeFiltered = prefixSpecs.isNotEmpty() && !matched
+                    val matchedSpecs = when {
+                        rangeAlarm -> listOfNotNull(alarmSpec)
+                        allowMatched -> inRangeSpecs.filter { !it.serialAlarmInRange || !hasSerialRange(it) }
+                        else -> prefixSpecs.filter { it.serialAlarmInRange && hasSerialRange(it) }
+                    }
 
                     // 忽略（v1.7.0 第 6 条）：可重复扫且勾选「忽略」的条码 → 不记录、不落盘、不计数，
                     // 仅正常反馈 + 语音提示「辅助码」（双码机固定码不再堆积噪声记录）
-                    val ignored = matchedSpecs.any { it.allowDuplicate && it.ignoreRepeat }
+                    val ignored = !rangeAlarm && matchedSpecs.any { it.allowDuplicate && it.ignoreRepeat }
                     if (ignored) {
                         alarm.success()
                         alarm.speakAux()
@@ -1332,7 +1364,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         historyHit = historyHit != null,
                         countEnabled = countEnabled,
                         total = st.total,
-                        okCount = st.okCount
+                        okCount = st.okCount,
+                        rangeAlarm = rangeAlarm
                     )
                     val message = when (result) {
                         ScanResult.SERIAL_MISMATCH ->
@@ -1344,23 +1377,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 rangeFiltered -> {
                                     // v1.7.0：把规则的流水号范围带进提示，方便现场核对（多前缀命中时取最长前缀）
                                     val spec = prefixSpecs.maxByOrNull { it.prefix.length }
-                                    val range = when {
-                                        spec == null -> ""
-                                        spec.serialMin.isNotBlank() && spec.serialMax.isNotBlank() ->
-                                            "${spec.serialMin}~${spec.serialMax}"
-                                        spec.serialMin.isNotBlank() -> "≥${spec.serialMin}"
-                                        spec.serialMax.isNotBlank() -> "≤${spec.serialMax}"
-                                        else -> ""
-                                    }
-                                    val suffix = if (range.isBlank()) "" else {
-                                        val tail = if (spec != null && spec.serialTailLen > 0)
-                                            "末${spec.serialTailLen}位 " else ""
-                                        "（$tail$range）"
-                                    }
-                                    "串号报警！条码流水号不在规则范围$suffix：$barcode"
+                                    "串号报警！条码流水号不在规则范围${serialRangeSuffix(spec)}：$barcode"
                                 }
                                 else -> "串号报警！条码不符合本柜规则：$barcode"
                             }
+                        ScanResult.SERIAL_ALARM ->
+                            "流水号报警！条码命中报警范围${serialRangeSuffix(alarmSpec)}：$barcode"
                         ScanResult.DUPLICATE -> "重复扫码！该条码已录入过：$barcode"
                         ScanResult.AUX -> "辅助码（不计入本柜统计）：$barcode"
                         ScanResult.OVER_LIMIT -> "超出计划装柜数量（${st.total}）！条码：$barcode"
@@ -1419,7 +1441,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 containerNo = container.containerNo,
                                 total = st.total,
                                 ok = st.okCount + 1,
-                                mismatch = st.mismatchCount,
+                                mismatch = st.mismatchCount + st.alarmCount,
                                 duplicate = st.duplicateCount,
                                 over = st.overCount,
                                 totalRecords = st.totalRecords + 1,
@@ -1437,6 +1459,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             completedSummarySaved = if (willComplete) summarySaved else cur.completedSummarySaved,
                             mismatchCount = if (result == ScanResult.SERIAL_MISMATCH)
                                 cur.mismatchCount + 1 else cur.mismatchCount,
+                            alarmCount = if (result == ScanResult.SERIAL_ALARM)
+                                cur.alarmCount + 1 else cur.alarmCount,
                             duplicateCount = if (result == ScanResult.DUPLICATE)
                                 cur.duplicateCount + 1 else cur.duplicateCount,
                             overCount = if (result == ScanResult.OVER_LIMIT)
@@ -1854,8 +1878,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private data class ResultCounts(val ok: Int, val mm: Int, val dup: Int, val over: Int, val aux: Int) {
-        val total: Int get() = ok + mm + dup + over + aux
+    private data class ResultCounts(
+        val ok: Int,
+        val mm: Int,
+        val dup: Int,
+        val over: Int,
+        val aux: Int,
+        val alarm: Int
+    ) {
+        val total: Int get() = ok + mm + dup + over + aux + alarm
     }
 
     private suspend fun countResults(containerId: Long): ResultCounts = ResultCounts(
@@ -1863,11 +1894,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         mm = recordDao.countByResultOnDay(containerId, ScanResult.SERIAL_MISMATCH.name, todayLabel()),
         dup = recordDao.countByResultOnDay(containerId, ScanResult.DUPLICATE.name, todayLabel()),
         over = recordDao.countByResultOnDay(containerId, ScanResult.OVER_LIMIT.name, todayLabel()),
-        aux = recordDao.countByResultOnDay(containerId, ScanResult.AUX.name, todayLabel())
+        aux = recordDao.countByResultOnDay(containerId, ScanResult.AUX.name, todayLabel()),
+        alarm = recordDao.countByResultOnDay(containerId, ScanResult.SERIAL_ALARM.name, todayLabel())
     )
 
     /** 今天（设备本地时区）的日期标签，与 SQLite strftime('%Y-%m-%d','localtime') 一致 */
     private fun todayLabel(): String = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date())
+
+    private fun hasSerialRange(spec: RuleSpec): Boolean =
+        spec.serialMin.isNotBlank() || spec.serialMax.isNotBlank()
+
+    /** 流水号范围提示：如「（末3位 100~200）」「（≥100）」，未设范围返回空串 */
+    private fun serialRangeSuffix(spec: RuleSpec?): String {
+        if (spec == null) return ""
+        val range = when {
+            spec.serialMin.isNotBlank() && spec.serialMax.isNotBlank() ->
+                "${spec.serialMin}~${spec.serialMax}"
+            spec.serialMin.isNotBlank() -> "≥${spec.serialMin}"
+            spec.serialMax.isNotBlank() -> "≤${spec.serialMax}"
+            else -> ""
+        }
+        if (range.isBlank()) return ""
+        val tail = if (spec.serialTailLen > 0) "末${spec.serialTailLen}位 " else ""
+        return "（$tail$range）"
+    }
 
     override fun onCleared() {
         scanner.unregister()

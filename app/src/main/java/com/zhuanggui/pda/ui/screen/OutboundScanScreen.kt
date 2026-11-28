@@ -116,6 +116,7 @@ fun OutboundScanScreen(
                         when (state.lastResult) {
                             ScanResult.DUPLICATE -> "重复扫码"
                             ScanResult.SERIAL_MISMATCH -> "串号报警"
+                            ScanResult.SERIAL_ALARM -> "流水号报警"
                             ScanResult.OVER_LIMIT -> "超出计划装柜数量"
                             else -> "报警"
                         },
@@ -130,6 +131,7 @@ fun OutboundScanScreen(
                         append(state.lastMessage)
                         if (state.lastResult == ScanResult.DUPLICATE ||
                             state.lastResult == ScanResult.SERIAL_MISMATCH ||
+                            state.lastResult == ScanResult.SERIAL_ALARM ||
                             state.lastResult == ScanResult.OVER_LIMIT
                         ) {
                             append("\n\n可点「删除这条记录」移除刚扫的这条（进回收站）；")
@@ -147,6 +149,7 @@ fun OutboundScanScreen(
             },
             dismissButton = if (state.lastResult == ScanResult.DUPLICATE ||
                 state.lastResult == ScanResult.SERIAL_MISMATCH ||
+                state.lastResult == ScanResult.SERIAL_ALARM ||
                 state.lastResult == ScanResult.OVER_LIMIT
             ) {
                 {
@@ -158,6 +161,7 @@ fun OutboundScanScreen(
                         Text(
                             when (state.lastResult) {
                                 ScanResult.DUPLICATE -> "删除这条重复记录"
+                                ScanResult.SERIAL_ALARM -> "删除这条报警记录"
                                 ScanResult.OVER_LIMIT -> "删除这条超量记录"
                                 else -> "删除这条串号记录"
                             }
@@ -277,6 +281,7 @@ fun OutboundScanScreen(
         val kind = when (target.result) {
             ScanResult.DUPLICATE -> "重复"
             ScanResult.AUX -> "辅助码"
+            ScanResult.SERIAL_ALARM -> "报警"
             ScanResult.OVER_LIMIT -> "超量"
             else -> "串号"
         }
@@ -470,6 +475,7 @@ fun OutboundScanScreen(
             ) {
                 OutCount("正常", state.okCount, Color(0xFF388E3C), ScanResult.OK, Modifier.weight(1f))
                 OutCount("串号", state.mismatchCount, Color(0xFFD32F2F), ScanResult.SERIAL_MISMATCH, Modifier.weight(1f))
+                OutCount("报警", state.alarmCount, Color(0xFFD32F2F), ScanResult.SERIAL_ALARM, Modifier.weight(1f))
                 OutCount("重复", state.duplicateCount, Color(0xFFD32F2F), ScanResult.DUPLICATE, Modifier.weight(1f))
                 OutCount("超量", state.overCount, Color(0xFFF57F17), ScanResult.OVER_LIMIT, Modifier.weight(1f))
             }
@@ -572,6 +578,7 @@ fun OutboundScanScreen(
                         deletable = r.result == ScanResult.OK ||
                             r.result == ScanResult.DUPLICATE ||
                             r.result == ScanResult.SERIAL_MISMATCH ||
+                            r.result == ScanResult.SERIAL_ALARM ||
                             r.result == ScanResult.AUX ||
                             r.result == ScanResult.OVER_LIMIT,
                         onDeleteClick = {
@@ -614,6 +621,7 @@ private fun RecordRow(
     val (tag, tagColor) = when (r.result) {
         ScanResult.OK -> "正常" to Color(0xFF388E3C)
         ScanResult.SERIAL_MISMATCH -> "串号" to Color(0xFFD32F2F)
+        ScanResult.SERIAL_ALARM -> "报警" to Color(0xFFD32F2F)
         ScanResult.DUPLICATE -> "重复" to Color(0xFFD32F2F)
         ScanResult.OVER_LIMIT -> "超量" to Color(0xFFF57F17)
         ScanResult.AUX -> "辅助" to Color(0xFF1976D2)
@@ -662,7 +670,7 @@ private fun RecordRow(
 /** 结果色（与计数卡/记录行标签一致；报警弹窗、最新输出、完成弹窗的图标 tint 也取自这里） */
 private fun resultColor(result: ScanResult): Color = when (result) {
     ScanResult.OK -> Color(0xFF388E3C)
-    ScanResult.SERIAL_MISMATCH, ScanResult.DUPLICATE -> Color(0xFFD32F2F)
+    ScanResult.SERIAL_MISMATCH, ScanResult.SERIAL_ALARM, ScanResult.DUPLICATE -> Color(0xFFD32F2F)
     ScanResult.OVER_LIMIT -> Color(0xFFF57F17)
     ScanResult.AUX -> Color(0xFF1976D2)
     else -> Color.Gray
@@ -673,6 +681,7 @@ private fun resultIcon(result: ScanResult): ImageVector = when (result) {
     ScanResult.OK -> Icons.Filled.CheckCircle
     ScanResult.DUPLICATE -> Icons.Filled.Refresh
     ScanResult.SERIAL_MISMATCH -> Icons.Filled.Warning
+    ScanResult.SERIAL_ALARM -> Icons.Filled.Warning
     ScanResult.OVER_LIMIT -> Icons.Filled.AddCircle
     ScanResult.AUX -> Icons.Filled.Info
     else -> Icons.Filled.Warning
@@ -682,6 +691,7 @@ private fun resultIcon(result: ScanResult): ImageVector = when (result) {
 private fun resultLabel(result: ScanResult): String = when (result) {
     ScanResult.OK -> "正常"
     ScanResult.SERIAL_MISMATCH -> "串号"
+    ScanResult.SERIAL_ALARM -> "报警"
     ScanResult.DUPLICATE -> "重复"
     ScanResult.OVER_LIMIT -> "超量"
     ScanResult.AUX -> "辅助"

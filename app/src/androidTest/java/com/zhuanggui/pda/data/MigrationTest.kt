@@ -25,8 +25,9 @@ import org.junit.runner.RunWith
  *  - v13 → v14：scan_records 加 uid/syncedAt，新增 sync_state / sync_inbox（WiFi 同步）
  *  - v15 → v16：默认装柜数量归并到 rule_models，rule_library 去掉该列，移除 scan_setup_templates
  *  - v16 → v17：规则库 prefix 唯一索引改为普通索引，允许特殊码同前缀跨型号
- *  - v5 → v17 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
- *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→17 并按 17.json 校验。
+ *  - v17 → v18：load_rules 加 serialAlarmInRange（范围内报警黑名单，默认 0 = 旧行为）
+ *  - v5 → v18 全链：v5~v7 当年未导出 schema（无法用 createDatabase 建旧库），
+ *    改为手写与当年迁移 SQL 完全一致的 v5 建库脚本作为起点，再跑 5→6→…→18 并按 18.json 校验。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -325,9 +326,35 @@ class MigrationTest {
         }
     }
 
-    /** v5（手写起点）→ v17 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    /** v17（有 schema）→ v18：规则表加「范围内报警」，历史行默认 0 = 旧行为 */
     @Test
-    fun migrate5To17_fullChain() {
+    fun migrate17To18_addsSerialAlarmInRange() {
+        helper.createDatabase(TEST_DB, 17).use { db ->
+            db.execSQL(
+                "INSERT INTO load_containers (containerNo, totalQuantity, createdAt, status) " +
+                    "VALUES ('C-17TO18', 10, 1730000000000, 'ACTIVE')"
+            )
+            db.execSQL(
+                "INSERT INTO load_rules (containerId, prefix, allowDuplicate, countEnabled, checkHistory, " +
+                    "serialMin, serialMax, serialTailLen, ignoreRepeat) " +
+                    "VALUES (1, 'ASV12', 0, 1, 0, '1', '300', 0, 0)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 18, true, AppDatabase.ALL_MIGRATIONS[16])
+        try {
+            db.query("SELECT serialAlarmInRange FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** v5（手写起点）→ v18 全链：数据保留 + 新增列默认值正确 + barcode 索引生效 */
+    @Test
+    fun migrate5To18_fullChain() {
         context.deleteDatabase(TEST_DB)
         val dbFile = context.getDatabasePath(TEST_DB)
         dbFile.parentFile?.mkdirs()
@@ -392,9 +419,9 @@ class MigrationTest {
             db.version = 5
         }
 
-        // 跑 5→6→…→17（起点无 schema JSON，drop 校验传 false），结束后按 17.json 全量校验
+        // 跑 5→6→…→18（起点无 schema JSON，drop 校验传 false），结束后按 18.json 全量校验
         val db = helper.runMigrationsAndValidate(
-            TEST_DB, 17, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 16)
+            TEST_DB, 18, false, *AppDatabase.ALL_MIGRATIONS.copyOfRange(4, 17)
         )
         try {
             // 数据保留
@@ -433,6 +460,11 @@ class MigrationTest {
             }
             // v12 新增末尾位数默认 0（前缀后整段，旧行为不变）
             db.query("SELECT serialTailLen FROM load_rules LIMIT 1").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+            // v18 新增「范围内报警」默认 0（仍按旧的白名单逻辑）
+            db.query("SELECT serialAlarmInRange FROM load_rules LIMIT 1").use { c ->
                 c.moveToFirst()
                 assertEquals(0, c.getInt(0))
             }

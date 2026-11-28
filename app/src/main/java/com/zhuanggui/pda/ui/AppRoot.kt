@@ -19,6 +19,7 @@ import com.zhuanggui.pda.ui.screen.RecordsScreen
 import com.zhuanggui.pda.ui.screen.TsvReaderScreen
 import com.zhuanggui.pda.ui.screen.RulesScreen
 import com.zhuanggui.pda.ui.screen.ScannerSetupScreen
+import com.zhuanggui.pda.ui.screen.StorageSettingsScreen
 import com.zhuanggui.pda.ui.screen.SyncSettingsScreen
 import com.zhuanggui.pda.ui.screen.TrashScreen
 import kotlinx.coroutines.launch
@@ -32,6 +33,7 @@ object Routes {
     const val TRASH = "trash"
     const val SYNC = "sync"
     const val SCANNER_SETUP = "scanner_setup"
+    const val STORAGE_SETTINGS = "storage_settings"
     const val OP_LOG = "op_log"
     const val TSV_READER = "tsv_reader"
 }
@@ -69,6 +71,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     navController.navigate(Routes.SYNC)
                 },
                 onScannerSetup = { navController.navigate(Routes.SCANNER_SETUP) },
+                onStorageSettings = { navController.navigate(Routes.STORAGE_SETTINGS) },
                 onOpLog = { navController.navigate(Routes.OP_LOG) }
             )
         }
@@ -78,6 +81,13 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             val lastScan by vm.lastScan.collectAsStateWithLifecycle()
             ScannerSetupScreen(
                 lastScan = lastScan,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // ---------- 保存目录（记录 / 规则 / 日志统一根目录） ----------
+        composable(Routes.STORAGE_SETTINGS) {
+            StorageSettingsScreen(
                 onBack = { navController.popBackStack() }
             )
         }

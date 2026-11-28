@@ -1,5 +1,6 @@
 package com.zhuanggui.pda.export
 
+import com.zhuanggui.pda.StorageConfig
 import com.zhuanggui.pda.data.entity.RuleLibEntry
 import com.zhuanggui.pda.data.entity.RuleModel
 import java.io.File
@@ -16,12 +17,11 @@ import java.util.Locale
  * - 空型号也会导出一行（前缀为空），导入时用于建空型号
  * - 文件带 UTF-8 BOM + CRLF，Excel/WPS 双击打开中文不乱码
  *
- * 路径：/sdcard/zhuanggui/规则库/规则库_yyyyMMdd_HHmmss.tsv
+ * 路径：<保存目录>/规则库/规则库_yyyyMMdd_HHmmss.tsv（默认 /sdcard/zhuanggui/规则库）
  * 导入前备份：规则库_导入前备份_yyyyMMdd_HHmmss.tsv（同名自动 _2、_3，绝不覆盖旧文件）
  */
 object RuleExporter {
 
-    private const val DIR = "zhuanggui/规则库"
     private const val EXT = "tsv"
     private val timeFormat: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.US)
@@ -30,7 +30,7 @@ object RuleExporter {
         "型号名称", "前缀", "可重复扫", "计入统计", "查历史串号", "忽略", "默认装柜数量"
     )
 
-    fun displayDir(): String = "/sdcard/$DIR"
+    fun displayDir(): String = StorageConfig.pretty(FileExporter.ruleLibDir())
 
     /** 同名文件已存在时追加 _2、_3…，避免同一秒内导出/备份互相覆盖 */
     internal fun uniqueFile(dir: File, baseName: String): File {
@@ -44,7 +44,7 @@ object RuleExporter {
     }
 
     fun export(models: List<RuleModel>, rules: List<RuleLibEntry>): File {
-        val dir = File(android.os.Environment.getExternalStorageDirectory(), DIR)
+        val dir = FileExporter.ruleLibDir()
         dir.mkdirs()
         val file = uniqueFile(dir, "规则库_${timeFormat.format(LocalDateTime.now())}")
         exportTo(file, models, rules)
@@ -68,7 +68,7 @@ object RuleExporter {
 
     private fun backup(models: List<RuleModel>, rules: List<RuleLibEntry>, prefix: String): File? {
         if (models.isEmpty() && rules.isEmpty()) return null
-        val dir = File(android.os.Environment.getExternalStorageDirectory(), DIR)
+        val dir = FileExporter.ruleLibDir()
         dir.mkdirs()
         val file = uniqueFile(dir, "${prefix}_${timeFormat.format(LocalDateTime.now())}")
         exportTo(file, models, rules)

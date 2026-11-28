@@ -5,10 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.Environment
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.zhuanggui.pda.StorageConfig
 import com.zhuanggui.pda.data.entity.ScanRecord
 import com.zhuanggui.pda.data.entity.ScanResult
 import com.zhuanggui.pda.log.OpLog
@@ -50,9 +50,6 @@ import java.util.Locale
 object FileExporter {
 
     private const val TAG = "FileExporter"
-
-    /** 根目录名（用户要求：根目录下的 zhuanggui 文件夹） */
-    const val ROOT_NAME = "zhuanggui"
 
     /** 旧目录名（v1.9.x 用过，升级时迁移） */
     private const val LEGACY_ROOT_NAME = "ZhuangGui"
@@ -98,26 +95,31 @@ object FileExporter {
 
     fun init(context: Context) {
         appContext = context.applicationContext
+        StorageConfig.init(context)
     }
 
     // ---------------- 目录 ----------------
 
-    /** 根目录（PDA 文件管理器里直接可找） */
-    fun rootDir(): File = File(externalRoot(), "$ROOT_NAME/$RECORD_SUBDIR")
+    /** 根目录（用户可配置；默认 /sdcard/zhuanggui） */
+    private fun storageRoot(): File = StorageConfig.rootDir()
+
+    /** 装柜记录目录（PDA 文件管理器里直接可找） */
+    fun rootDir(): File = File(storageRoot(), RECORD_SUBDIR)
 
     /** 文件回收站目录（与 APP 删除动作一致：删掉的记录文件挪到这里） */
-    fun trashRootDir(): File = File(externalRoot(), "$ROOT_NAME/$TRASH_SUBDIR")
+    fun trashRootDir(): File = File(storageRoot(), TRASH_SUBDIR)
 
     /** 规则库目录（与记录同根） */
-    fun ruleLibDir(): File = File(externalRoot(), "$ROOT_NAME/规则库")
+    fun ruleLibDir(): File = File(storageRoot(), "规则库")
 
     /** 界面展示用路径（/sdcard 与真实路径 /storage/emulated/0 等价） */
-    fun displayPath(): String = "/sdcard/$ROOT_NAME/$RECORD_SUBDIR"
+    fun displayPath(): String = StorageConfig.pretty(rootDir())
 
     /** 装柜完成汇总文件在文件管理器里的展示路径 */
-    fun summaryDisplayPath(): String = "/sdcard/$ROOT_NAME/$SUMMARY_FILE"
+    fun summaryDisplayPath(): String = StorageConfig.pretty(File(storageRoot(), SUMMARY_FILE))
 
-    private fun externalRoot(): File = Environment.getExternalStorageDirectory()
+    /** 日志目录（与记录同根） */
+    fun logDir(): File = File(storageRoot(), "日志")
 
     /** 兜底目录（App 专属，主目录不可写时用；一定可写） */
     fun fallbackBase(): File {
@@ -133,7 +135,7 @@ object FileExporter {
     /** 主目录是否可写（实测：写一个探针文件再删） */
     fun primaryWritable(): Boolean {
         primaryWritableCache?.let { return it }
-        val probe = File(externalRoot(), "$ROOT_NAME/.write_probe")
+        val probe = File(storageRoot(), ".write_probe")
         val ok = runCatching {
             probe.parentFile?.mkdirs()
             probe.writeText("ok")
@@ -180,10 +182,10 @@ object FileExporter {
 
     // ---------------- 旧目录迁移 ----------------
 
-    /** v1.10.0：旧目录 /sdcard/ZhuangGui → /sdcard/zhuanggui（改名或合并拷贝；同目录则跳过） */
+    /** v1.10.0：旧目录 /sdcard/ZhuangGui → 当前保存根目录（改名或合并拷贝；同目录则跳过） */
     fun migrateLegacyRoot() {
-        val legacy = File(externalRoot(), LEGACY_ROOT_NAME)
-        val target = File(externalRoot(), ROOT_NAME)
+        val legacy = File(StorageConfig.externalRoot(), LEGACY_ROOT_NAME)
+        val target = storageRoot()
         if (!legacy.exists()) return
         if (legacy.absolutePath.equals(target.absolutePath, ignoreCase = true)) return   // 同一目录
         runCatching {
@@ -194,6 +196,110 @@ object FileExporter {
                 Log.i(TAG, "legacy root merged -> $target")
             }
         }.onFailure { Log.w(TAG, "migrate legacy root failed: ${it.message}") }
+    }
+
+    /**
+     * 切换保存根目录（v1.13.0）：校验新目录可写 → 迁移旧根目录下由本 App 管理的内容
+     * （装柜记录 / 回收站 / 规则库 / 日志 / 装柜完成汇总.tsv）→ 保存配置。
+     *
+     * - [path] 为空 = 恢复默认目录；
+     * - 新目录必须能创建并写入探针文件，否则返回失败且不改配置；
+     * - 迁移成功后才删除旧目录里的「本 App 管理内容」，旧目录里的其他文件不动；
+     * - 新旧目录相同则只保存配置，不搬文件。
+     *
+     * @return 成功时返回迁移的文件数（0 = 无需迁移）
+     */
+    @Synchronized
+    fun changeRoot(context: Context, path: String?): Result<Int> {
+        val oldRoot = storageRoot()
+        val newRoot = if (path.isNullOrBlank()) StorageConfig.defaultRoot() else StorageConfig.normalize(path)
+
+        // 不允许把新目录放到旧目录内部（否则复制/删除会互相影响）
+        if (newRoot.absolutePath.startsWith(oldRoot.absolutePath + File.separator)) {
+            return Result.failure(IllegalArgumentException("新目录不能位于当前目录内部"))
+        }
+
+        // 校验新目录可写（目录不存在则创建）
+        if (!newRoot.exists() && !newRoot.mkdirs()) {
+            return Result.failure(IllegalStateException("无法创建目录：${StorageConfig.pretty(newRoot)}"))
+        }
+        val probe = File(newRoot, ".write_probe")
+        val writable = runCatching {
+            probe.writeText("ok")
+            probe.delete()
+            true
+        }.getOrDefault(false)
+        if (!writable) {
+            return Result.failure(IllegalStateException("目录不可写：${StorageConfig.pretty(newRoot)}"))
+        }
+
+        val same = oldRoot.absolutePath.equals(newRoot.absolutePath, ignoreCase = true)
+        if (same) {
+            StorageConfig.setRoot(context, path)
+            primaryWritableCache = null
+            lastWriteError = null
+            return Result.success(0)
+        }
+
+        val moved = runCatching { migrateManaged(oldRoot, newRoot) }
+            .getOrElse {
+                Log.w(TAG, "change root migrate failed: ${it.message}")
+                return Result.failure(it)
+            }
+
+        StorageConfig.setRoot(context, path)
+        primaryWritableCache = null
+        lastWriteError = null
+        Log.i(TAG, "storage root changed: $oldRoot -> $newRoot (files=$moved)")
+        OpLog.info("保存目录", "已切换到 ${StorageConfig.pretty(newRoot)}，迁移文件 $moved 个")
+        return Result.success(moved)
+    }
+
+    /** 本 App 在根目录下管理的条目（切目录时只迁移/清理这些） */
+    private val MANAGED_ENTRIES = listOf(RECORD_SUBDIR, TRASH_SUBDIR, "规则库", "日志", SUMMARY_FILE)
+
+    /**
+     * 把旧根目录下的管理内容复制到新根目录，全部成功后删除旧内容。
+     * 返回复制的文件数；任何一步失败抛异常（此时不删旧数据）。
+     */
+    private fun migrateManaged(oldRoot: File, newRoot: File): Int {
+        if (!oldRoot.exists()) return 0
+        var copied = 0
+        val sources = mutableListOf<File>()
+        MANAGED_ENTRIES.forEach { name ->
+            val src = File(oldRoot, name)
+            if (!src.exists()) return@forEach
+            val dst = File(newRoot, name)
+            if (src.isDirectory) {
+                if (!copyTreeChecked(src, dst)) error("复制失败：${src.absolutePath}")
+                copied += dst.walkTopDown().count { it.isFile }
+            } else {
+                dst.parentFile?.mkdirs()
+                src.copyTo(dst, overwrite = true)
+                copied++
+            }
+            sources.add(src)
+        }
+        // 复制全部成功后再清理旧目录里的管理内容（保留用户放的其他文件）
+        sources.forEach { src ->
+            runCatching { if (src.isDirectory) src.deleteRecursively() else src.delete() }
+        }
+        return copied
+    }
+
+    private fun copyTreeChecked(src: File, dst: File): Boolean {
+        if (!src.exists()) return true
+        return if (src.isDirectory) {
+            if (!dst.exists() && !dst.mkdirs()) return false
+            val children = src.listFiles() ?: return false
+            children.all { copyTreeChecked(it, File(dst, it.name)) }
+        } else {
+            runCatching {
+                dst.parentFile?.mkdirs()
+                src.copyTo(dst, overwrite = true)
+                true
+            }.getOrDefault(false)
+        }
     }
 
     private fun copyTree(src: File, dst: File) {
@@ -208,9 +314,9 @@ object FileExporter {
 
     // ---------------- 写入 ----------------
 
-    private fun recordDirOf(base: File): File = File(base, "$ROOT_NAME/$RECORD_SUBDIR")
-    private fun trashDirOf(base: File): File = File(base, "$ROOT_NAME/$TRASH_SUBDIR")
-    private fun summaryDirOf(base: File): File = File(base, ROOT_NAME)
+    private fun recordDirOf(base: File): File = File(base, RECORD_SUBDIR)
+    private fun trashDirOf(base: File): File = File(base, TRASH_SUBDIR)
+    private fun summaryDirOf(base: File): File = base
 
     /** 柜号 → 安全文件名（去掉文件系统非法字符） */
     private fun safeName(containerNo: String): String =
@@ -302,14 +408,14 @@ object FileExporter {
      */
     @Synchronized
     fun append(record: ScanRecord): Boolean {
-        if (appendTo(externalRoot(), record)) {
+        if (appendTo(storageRoot(), record)) {
             lastWriteError = null
             primaryWritableCache = true
             return true
         }
         val fb = appendTo(fallbackBase(), record)
         lastWriteError = if (fb) {
-            "主目录 /sdcard/$ROOT_NAME 不可写，记录已暂存到 ${fallbackDisplayPath()}"
+            "主目录 ${StorageConfig.pretty(storageRoot())} 不可写，记录已暂存到 ${fallbackDisplayPath()}"
         } else {
             "记录保存失败：主目录与暂存目录都不可写（请检查存储空间/权限）"
         }
@@ -419,7 +525,7 @@ object FileExporter {
             append('\t'); append(operatorId)
             append('\n')
         }
-        val ok = appendCompletionTo(externalRoot(), line)
+        val ok = appendCompletionTo(storageRoot(), line)
         if (ok) {
             lastWriteError = null
             return true
@@ -455,7 +561,7 @@ object FileExporter {
      */
     @Synchronized
     fun syncDay(dayLabel: String, containerNo: String, active: List<ScanRecord>, deleted: List<ScanRecord>) {
-        val done = syncDayInto(externalRoot(), dayLabel, containerNo, active, deleted)
+        val done = syncDayInto(storageRoot(), dayLabel, containerNo, active, deleted)
         if (!done) {
             val fb = syncDayInto(fallbackBase(), dayLabel, containerNo, active, deleted)
             lastWriteError = if (fb) {
@@ -525,14 +631,14 @@ object FileExporter {
             val (day, container) = key
             val active = list.filter { it.deletedAt == null }
             val deleted = list.filter { it.deletedAt != null }
-            if (syncDayInto(externalRoot(), day, container, active, deleted)) files += 2
+            if (syncDayInto(storageRoot(), day, container, active, deleted)) files += 2
         }
         primaryWritableCache = null
         return files
     }
 
     /**
-     * 把兜底目录里暂存的记录搬回主目录 /sdcard/zhuanggui。
+     * 把兜底目录里暂存的记录搬回当前保存根目录。
      * 返回搬回的文件数；主目录仍不可写时返回 0（记录保留在暂存目录）。
      */
     @Synchronized
@@ -542,9 +648,12 @@ object FileExporter {
         if (!base.exists()) return 0
         var count = 0
         base.walkTopDown().filter { it.isFile }.forEach { f ->
-            val rel = f.relativeTo(base)
-            // rel 以 zhuanggui/ 开头（暂存目录按主目录结构镜像），直接搬到 /sdcard 下
-            val target = File(externalRoot(), rel.path)
+            var rel = f.relativeTo(base).path
+            // 兼容旧版暂存结构（records/zhuanggui/…）：去掉前缀 zhuanggui/
+            if (rel.startsWith("zhuanggui/") || rel.startsWith("zhuanggui\\")) {
+                rel = rel.substring("zhuanggui/".length)
+            }
+            val target = File(storageRoot(), rel)
             runCatching {
                 target.parentFile?.mkdirs()
                 f.copyTo(target, overwrite = true)

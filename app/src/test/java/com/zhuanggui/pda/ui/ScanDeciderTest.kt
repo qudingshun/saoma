@@ -6,7 +6,7 @@ import org.junit.Test
 
 /**
  * decideScanResult 判定顺序与边界单测。
- * 顺序契约：规则串号 → 同柜重复 → 历史串号 → 辅助码 → 超量 → 正常。
+ * 顺序契约：规则串号 → 流水号报警范围 → 同柜重复 → 历史串号 → 辅助码 → 超量 → 正常。
  */
 class ScanDeciderTest {
 
@@ -16,8 +16,9 @@ class ScanDeciderTest {
         historyHit: Boolean = false,
         countEnabled: Boolean = true,
         total: Int = 0,
-        okCount: Int = 0
-    ): ScanResult = decideScanResult(matched, dupCount, historyHit, countEnabled, total, okCount)
+        okCount: Int = 0,
+        rangeAlarm: Boolean = false
+    ): ScanResult = decideScanResult(matched, dupCount, historyHit, countEnabled, total, okCount, rangeAlarm)
 
     /** 规则不匹配压过重复/历史串号/超量等一切条件 */
     @Test
@@ -25,6 +26,24 @@ class ScanDeciderTest {
         assertEquals(
             ScanResult.SERIAL_MISMATCH,
             decide(matched = false, dupCount = 3, historyHit = true, total = 1, okCount = 99)
+        )
+    }
+
+    /** 流水号命中报警范围压过重复/历史/辅助/超量（每枪都报警） */
+    @Test
+    fun rangeAlarm_winsOverDuplicateHistoryAuxAndOverLimit() {
+        assertEquals(
+            ScanResult.SERIAL_ALARM,
+            decide(rangeAlarm = true, dupCount = 3, historyHit = true, countEnabled = false, total = 1, okCount = 99)
+        )
+    }
+
+    /** 规则不匹配仍优先于报警范围（报警范围只对已匹配前缀生效） */
+    @Test
+    fun notMatched_winsOverRangeAlarm() {
+        assertEquals(
+            ScanResult.SERIAL_MISMATCH,
+            decide(matched = false, rangeAlarm = true)
         )
     }
 

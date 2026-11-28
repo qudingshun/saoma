@@ -1,6 +1,5 @@
 package com.zhuanggui.pda.ui.screen
 
-import android.os.Environment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.zhuanggui.pda.StorageConfig
 import com.zhuanggui.pda.export.FileExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -60,7 +60,7 @@ import kotlin.math.max
  */
 @Composable
 fun TsvReaderScreen(onBack: () -> Unit) {
-    val appRoot = remember { File(Environment.getExternalStorageDirectory(), "zhuanggui") }
+    val appRoot = remember { StorageConfig.rootDir() }
     var mode by remember { mutableStateOf(0) }          // 0=装柜记录 1=回收站
     var files by remember { mutableStateOf<List<TsvFileItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -130,7 +130,7 @@ fun TsvReaderScreen(onBack: () -> Unit) {
                 }
 
                 Text(
-                    "直接读原始 TSV：/sdcard/zhuanggui/${if (mode == 0) "装柜记录" else "回收站"}/",
+                    "直接读原始 TSV：${StorageConfig.pretty(root)}/",
                     fontSize = 10.sp, color = Color.Gray,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )

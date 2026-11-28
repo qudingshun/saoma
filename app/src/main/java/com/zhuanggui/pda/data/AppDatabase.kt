@@ -28,7 +28,7 @@ import com.zhuanggui.pda.data.entity.SyncState
         LoadContainer::class, LoadRule::class, ScanRecord::class, RuleLibEntry::class, RuleModel::class,
         SyncState::class, SyncInbox::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -351,12 +351,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v17 → v18：load_rules 加「范围内报警」serialAlarmInRange（v1.13.0）。
+         * 默认 0 = 保持旧行为（范围内正常、范围外串号）；勾选后范围变黑名单。
+         */
+        private val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE load_rules ADD COLUMN serialAlarmInRange INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         /** 全部迁移（addMigrations 与 instrumentation 迁移测试共用），按版本顺序 */
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
             MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
-            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18
         )
     }
 }
