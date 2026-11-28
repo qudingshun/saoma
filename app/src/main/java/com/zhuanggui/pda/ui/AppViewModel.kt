@@ -1873,6 +1873,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 mismatchCount = counts.mm,
                 duplicateCount = counts.dup,
                 overCount = counts.over,
+                alarmCount = counts.alarm,
                 totalRecords = counts.total
             )
         }

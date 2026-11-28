@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
@@ -80,7 +82,8 @@ fun HomeScreen(
             Column(
                 Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -94,14 +97,14 @@ fun HomeScreen(
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 contentScale = ContentScale.Fit
             )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(12.dp))
             Text("成品出库", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Text(
                 "v${BuildConfig.VERSION_NAME}",
                 fontSize = 16.sp,
                 color = Color.Gray
             )
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(18.dp))
 
             Button(
                 onClick = {
@@ -137,7 +140,7 @@ fun HomeScreen(
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(12.dp))
 
             if (lastContainerNo != null) {
                 // 继续装柜快捷入口：带出最近柜号进入设置页（自动载入原规则 + 已扫码数量）
